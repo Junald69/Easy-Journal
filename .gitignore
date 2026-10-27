@@ -1,0 +1,56 @@
+# Xcodeのプロジェクトフォルダ（中身ごと無視。XcodeGenで作るのでGitに入れない）
+*.xcodeproj/
+
+# Xcodeがユーザーごとに作る設定フォルダ
+xcuserdata/
+
+# Xcodeのビルド途中のファイル
+DerivedData/
+
+# ビルドの出力フォルダ
+build/
+
+# ビルドの出力フォルダ（ドット付き）
+.build/
+
+# テスト結果のまとまり
+*.xcresult
+
+# 実機に入れるアプリのファイル
+*.ipa
+
+# 不具合調査用のファイル（圧縮したもの）
+*.dSYM.zip
+
+# Macが自動で作る不要なファイル
+.DS_Store
+
+# AppleのAPIキー（秘密）
+*.p8
+
+# 証明書の秘密鍵が入ったファイル
+*.p12
+
+# 証明書
+*.cer
+
+# 実機インストール用の設定ファイル（秘密になりうる）
+*.mobileprovision
+
+# 環境変数ファイル（秘密が入りうる）
+.env
+
+# 環境変数の別ファイル（秘密が入りうる）
+.env.*
+
+# fastlaneが作るレポート
+fastlane/report.xml
+
+# fastlaneが作るテスト出力
+fastlane/test_output
+
+# Rubyの部品の置き場（fastlane用）
+vendor/bundle
+
+# Bundlerの設定フォルダ
+.bundle
