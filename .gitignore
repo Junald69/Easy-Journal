@@ -1,5 +1,6 @@
 # Xcodeのプロジェクトフォルダ（中身ごと無視。XcodeGenで作るのでGitに入れない）
 *.xcodeproj/
+App/Info.plist
 
 # Xcodeがユーザーごとに作る設定フォルダ
 xcuserdata/

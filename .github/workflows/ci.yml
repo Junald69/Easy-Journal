@@ -1,0 +1,181 @@
+# シミュレーター向けのビルドとテスト。
+# ビルドとは、書いたコードを、動くアプリの形に組み立てること。
+# シミュレーターとは、Mac の中で動く仮想の iPhone。
+#
+# macOS は時間でお金がかかる。Free プランの無料枠は月 2,000 分。
+# macOS は 1 分あたり約 $0.062。ジョブは分単位で切り上げる（1 分 22 秒は 2 分と数える）。
+# 「macOS は 10 倍消費」という記載は公式では未確認。
+# PR への push と main への push の両方で動く。
+# GitHub の予算アラート（Budgets and alerts）を設定しておくと安心（Jun 向けのメモ）。
+#
+# シミュレーターの選び方は非決定的。iPhone 17 は iOS 26.2 / 26.4 / 26.5 など複数あり、一覧の最初のものを使う。
+# OS を固定したい場合は、あとで OS= を指定する（今は固定しない）。
+name: CI
+
+# Xcode の版はここだけに書く。下の手順は、この値から場所を作る。
+env:
+  XCODE_VERSION: "26.6"
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - main
+    # ドキュメントだけの変更では動かさない。
+    # ほかのファイルも一緒に変わっているときは動く。
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+
+# PR のときだけ、同じブランチの古い実行を止める。main への push は履歴に残す。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    name: シミュレーターでビルドとテスト
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      # actions/checkout の安定版。
+      # 2026-10-27 に GitHub の Releases を確認し、最新の安定版は v7.0.1（2026-07-20 公開）。
+      - name: コードを取得
+        uses: actions/checkout@v7.0.1
+
+      # 要確認: sudo xcode-select -s で Xcode を選ぶ方法は、
+      # GitHub の公式ドキュメント（docs.github.com）では確認できていない。
+      # 選んだあと xcodebuild -version を表示し、26.6 でなければ失敗にする。
+      - name: Xcode を 26.6 に固定
+        run: |
+          set -e
+          set -o pipefail
+          sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+          echo "xcode-select -p:"
+          xcode-select -p
+          echo "xcodebuild -version:"
+          xcodebuild -version | tee /tmp/xcode-version.txt
+          version_line="$(head -n 1 /tmp/xcode-version.txt)"
+          if [ "$version_line" != "Xcode ${XCODE_VERSION}" ]; then
+            echo "error: Xcode ${XCODE_VERSION} ではありません: ${version_line}"
+            exit 1
+          fi
+
+      - name: XcodeGen でプロジェクトを作る
+        run: |
+          set -e
+          set -o pipefail
+          brew install xcodegen
+          xcodegen --version
+          xcodegen generate
+
+      # 機種名は固定しない。利用できる iPhone の一覧から UDID（そのシミュレーターの識別子）を取る。
+      # 名前がちょうど「iPhone 17」のものがあればそれを使う。なければ最初の iPhone。
+      # 一覧から取れないときだけ、予備として name=iPhone 17 を使う（この予備は未確認）。
+      - name: シミュレーターを選ぶ
+        run: |
+          set -e
+          set -o pipefail
+          echo "=== xcrun simctl list ==="
+          xcrun simctl list
+          echo "=== xcrun simctl list devices available ==="
+          available="$(xcrun simctl list devices available)"
+          printf '%s\n' "$available"
+
+          preferred_udid=""
+          fallback_udid=""
+          fallback_name=""
+
+          while IFS= read -r line; do
+            case "$line" in
+              *"(unavailable)"*)
+                continue
+                ;;
+            esac
+            if [[ "$line" =~ ^[[:space:]]*(.+)[[:space:]]\(([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\) ]]; then
+              name="${BASH_REMATCH[1]}"
+              id="${BASH_REMATCH[2]}"
+              name="${name#"${name%%[![:space:]]*}"}"
+              name="${name%"${name##*[![:space:]]}"}"
+              case "$name" in
+                iPhone*)
+                  ;;
+                *)
+                  continue
+                  ;;
+              esac
+              if [ -z "$fallback_udid" ]; then
+                fallback_udid="$id"
+                fallback_name="$name"
+              fi
+              if [ "$name" = "iPhone 17" ] && [ -z "$preferred_udid" ]; then
+                preferred_udid="$id"
+              fi
+            fi
+          done < <(printf '%s\n' "$available")
+
+          if [ -n "$preferred_udid" ]; then
+            destination="platform=iOS Simulator,id=${preferred_udid}"
+            echo "選んだシミュレーター: iPhone 17 (${preferred_udid})"
+            echo "SIMULATOR_UDID=${preferred_udid}" >> "$GITHUB_ENV"
+          elif [ -n "$fallback_udid" ]; then
+            destination="platform=iOS Simulator,id=${fallback_udid}"
+            echo "iPhone 17 は見つかりませんでした。一覧の最初の iPhone を使います: ${fallback_name} (${fallback_udid})"
+            echo "SIMULATOR_UDID=${fallback_udid}" >> "$GITHUB_ENV"
+          else
+            destination="platform=iOS Simulator,name=iPhone 17"
+            echo "注意: UDID を取り出せませんでした。予備の destination を使います（未確認）: ${destination}"
+          fi
+
+          echo "DESTINATION=${destination}" >> "$GITHUB_ENV"
+          echo "destination: ${destination}"
+
+      # 署名（アプリを作った人を証明する手続き）の特別なフラグは付けない。
+      # シミュレーター向けでは要らないはずだが、未確認。
+      - name: ビルド
+        run: |
+          set -e
+          set -o pipefail
+          if [ -z "${DESTINATION}" ]; then
+            echo "error: DESTINATION が空です"
+            exit 1
+          fi
+          xcodebuild build \
+            -project EasyJournal.xcodeproj \
+            -scheme EasyJournal \
+            -destination "${DESTINATION}" \
+            -derivedDataPath DerivedData
+
+      - name: テスト
+        run: |
+          set -e
+          set -o pipefail
+          if [ -z "${DESTINATION}" ]; then
+            echo "error: DESTINATION が空です"
+            exit 1
+          fi
+          xcodebuild test \
+            -project EasyJournal.xcodeproj \
+            -scheme EasyJournal \
+            -destination "${DESTINATION}" \
+            -derivedDataPath DerivedData \
+            -resultBundlePath TestResults.xcresult
+
+      # actions/upload-artifact の安定版。
+      # 2026-10-27 に GitHub の Releases を確認し、最新の安定版は v7.0.2（2026-10-07 公開）。
+      # 失敗したときだけアップロードする。テストより前で失敗したときは、ファイルが無いことがある。
+      - name: 結果ファイルをアップロード
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: xcresult
+          path: TestResults.xcresult
+          retention-days: 7
