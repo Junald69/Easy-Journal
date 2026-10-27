@@ -1,0 +1,43 @@
+name: EasyJournal
+
+options:
+  # Bundle ID の元。決定済み（仮ではない）。
+  # この値だけだと、ターゲット名がそのまま付いて com.junald69.EasyJournal になる。
+  # 決定済みの com.junald69.easyjournal にするため、下で完全な値を指定している。
+  bundleIdPrefix: com.junald69
+  # 最低 iOS バージョン。仮（U-01。安定性重視の仮の値）。
+  deploymentTarget:
+    iOS: "18.0"
+
+targets:
+  EasyJournal:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    settings:
+      # 決定済みの Bundle ID。仮ではない。
+      # PRODUCT_BUNDLE_IDENTIFIER を書くと、このターゲットでは上の bundleIdPrefix の自動生成は使われない。
+      PRODUCT_BUNDLE_IDENTIFIER: com.junald69.easyjournal
+      # Swift の言語モード。仮（U-02）。5.0 系。
+      SWIFT_VERSION: "5.0"
+      # iPhone のみ。1 は iPhone。Xcode の画面で効くかは未確認（要確認）。
+      TARGETED_DEVICE_FAMILY: "1"
+      # Mac と visionOS の「iPad 向けアプリを動かす」実行先を出さない。効くかは未確認（要確認）。
+      SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
+      SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: "NO"
+    info:
+      path: App/Info.plist
+      properties:
+        # アプリ名。仮。
+        CFBundleDisplayName: Easy Journal
+        # 起動画面。ストーリーボードは置かない。
+        UILaunchScreen: {}
+        # 画面の向き。iPhone の一般的な向き（縦、左横、右横）。
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # SwiftUI の画面切り替え（シーン）に必要な最小の設定。
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
