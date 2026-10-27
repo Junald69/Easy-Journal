@@ -1,11 +1,23 @@
 # シミュレーター向けのビルドとテスト。
 # ビルドとは、書いたコードを、動くアプリの形に組み立てること。
 # シミュレーターとは、Mac の中で動く仮想の iPhone。
+#
+# macOS は時間でお金がかかる。Free プランの無料枠は月 2,000 分。
+# macOS は 1 分あたり約 $0.062。ジョブは分単位で切り上げる（1 分 22 秒は 2 分と数える）。
+# 「macOS は 10 倍消費」という記載は公式では未確認。
+# PR への push と main への push の両方で動く。
+# GitHub の予算アラート（Budgets and alerts）を設定しておくと安心（Jun 向けのメモ）。
+#
+# シミュレーターの選び方は非決定的。iPhone 17 は iOS 26.2 / 26.4 / 26.5 など複数あり、一覧の最初のものを使う。
+# OS を固定したい場合は、あとで OS= を指定する（今は固定しない）。
 name: CI
 
 # Xcode の版はここだけに書く。下の手順は、この値から場所を作る。
 env:
   XCODE_VERSION: "26.6"
+
+permissions:
+  contents: read
 
 on:
   pull_request:
@@ -23,10 +35,10 @@ on:
       - "docs/**"
       - "README.md"
 
-# 同じブランチで新しい実行が始まったら、古い実行を止める。
+# PR のときだけ、同じブランチの古い実行を止める。main への push は履歴に残す。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-test:

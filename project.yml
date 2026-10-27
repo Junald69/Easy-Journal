@@ -59,8 +59,7 @@ targets:
       GENERATE_INFOPLIST_FILE: YES
 
 # 共有スキーム（xcodebuild -scheme で使う実行設定）。
-# XcodeGen の仕様では、ここにあるスキームは shared: false にしない限り共有される。
-# 明示するため shared: true も書く。生成結果はまだ見ていない（要確認）。
+# shared: true を明示している。共有されるかは、生成後のファイルで確認する（要確認）。
 schemes:
   EasyJournal:
     build:
