@@ -169,14 +169,17 @@ final class JournalStoreMonthlyLogTests: XCTestCase {
         return (store, context, container)
     }
 
-    private func recordCounts(
-        in context: ModelContext
-    ) throws -> (page: Int, monthly: Int, daily: Int, line: Int) {
+    private func recordCounts(in context: ModelContext) throws -> RecordCounts {
         let pageCount = try context.fetchCount(FetchDescriptor<Page>())
         let monthlyCount = try context.fetchCount(FetchDescriptor<MonthlyPage>())
         let dailyCount = try context.fetchCount(FetchDescriptor<DailyPage>())
         let lineCount = try context.fetchCount(FetchDescriptor<MonthlyLogLine>())
-        return (pageCount, monthlyCount, dailyCount, lineCount)
+        return RecordCounts(
+            page: pageCount,
+            monthly: monthlyCount,
+            daily: dailyCount,
+            line: lineCount
+        )
     }
 
     private func uuid(_ text: String) throws -> UUID {
@@ -208,4 +211,12 @@ final class JournalStoreMonthlyLogTests: XCTestCase {
             "2026-10-31": "月末。October ends.",
         ]
     }
+}
+
+/// ページと行の件数。タプルは Equatable になれないので、比較はこの構造体で行う。
+private struct RecordCounts: Equatable {
+    let page: Int
+    let monthly: Int
+    let daily: Int
+    let line: Int
 }
