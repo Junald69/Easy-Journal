@@ -1,7 +1,8 @@
 import Foundation
 
 /// 起動時に渡された引数を読む小さな型。
-/// いまは読むだけ。サンプルデータを入れる処理や、指定した画面を開く処理は、ここにあとで中身を入れる（T-109）。
+/// 読むだけ。見本を入れる処理は `SampleData`。ここには置かない。
+/// `-openPage` の文字列で画面を開く処理は、まだ入れない（T-110）。
 struct LaunchOptions {
     /// `-sampleData` が付いているとき true。
     let sampleData: Bool
