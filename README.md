@@ -215,6 +215,24 @@ V1 を入れ子の enum（中にクラスを置く形）に固め、V2 を足し
 - 取り消すと、元は □ か ◧ に戻ります。コピーが作った直後のままなら消します。名前や進み具合を変えたあとは、コピーを残してつながりだけ外します。
 - ページ同士のつながり（PageLink）は、取り消しても消しません。
 
+## ページの指定と URL
+
+どのページを開くかは、次の文字列で表します。将来、起動引数 `-openPage` の次にこの文字列を書きます。画面は、この変更では作りません。
+
+- 月の記録（Monthly Log）: `monthly:2026-10`
+- 月の習慣表（Monthly Tracker）: `tracker:2026-10`
+- その日のページ（Daily）: `daily:2026-10-27`
+
+URL（ディープリンク。特定のページを直接開くための住所）は、次のとおりです。`easyjournal://` で始まる住所を、このアプリが受け取れるように登録する作業は、まだしません。
+
+- `easyjournal://daily/today` … 今日の Daily
+- `easyjournal://daily/2026-10-27` … 指定した日の Daily
+- `easyjournal://monthly/today` … 今月の Monthly Log
+- `easyjournal://monthly/2026-10` … 指定した月の Monthly Log
+- `easyjournal://tracker/2026-10` … 指定した月の Monthly Tracker
+
+`today` は、そのときに渡した「いま」の日付です。小文字だけを正しいとみなします。
+
 ## これから追加される項目
 
 - ビルド方法（上の「ビルド方法」に書きました）
