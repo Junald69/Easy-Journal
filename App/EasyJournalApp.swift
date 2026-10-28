@@ -4,23 +4,33 @@ import SwiftUI
 /// アプリの入口。
 ///
 /// 起動時に保存の入れ物（`ModelContainer`）を作る。
-/// 成功したときは、今までどおり「Easy Journal」と出す。
+/// 成功したときは、仮の画面で「Easy Journal」と、いま開いているページの文字を出す。
 /// 失敗したときは、クラッシュさせず、エラーの画面を出す。
 /// データを消したり、別の場所に作り直したりはしない。
 ///
 /// `-inMemoryStore` が付いているときだけ、メモリ上の保存先を使う。
 /// Debug のとき、見本を入れてよいかは `SampleData.shouldInstall` が決める。
 /// 条件を満たすときだけ見本を入れる。入れ損ねても、クラッシュさせず、そのまま起動する。
-/// `-openPage` で画面を開く処理は、まだ入れない（T-110）。
+/// `-openPage` の文字列が読めたときは、そのページを最初のページにする。
+/// 無いか、読めないときは、いまの月の記録（Monthly Log）のまま。
+/// 本物の月ページなどは、次のチケット（T-111 以降）で作る。
 @main
 struct EasyJournalApp: App {
     /// 開けた保存の入れ物。失敗したときは nil。
     private let modelContainer: ModelContainer?
     /// 失敗したときの説明。成功したときは nil。
     private let storageErrorMessage: String?
+    /// 今どのページを開いているか。成功の画面だけに渡す。
+    @State private var router: Router
 
     init() {
         let options = LaunchOptions()
+        let launchRouter = LaunchPage.makeRouter(
+            openPage: options.openPage,
+            now: Date(),
+            calendar: DateKey.makeCalendar()
+        )
+        _router = State(initialValue: launchRouter)
         do {
             let container = try StorageLocation.makeContainer(inMemory: options.inMemoryStore)
             modelContainer = container
@@ -49,8 +59,7 @@ struct EasyJournalApp: App {
     var body: some Scene {
         WindowGroup {
             if let modelContainer {
-                // 画面の文字は変えない。UIテストは「Easy Journal」を探す。
-                Text("Easy Journal")
+                PlaceholderPageView(router: router)
                     .modelContainer(modelContainer)
             } else {
                 VStack(spacing: 16) {
