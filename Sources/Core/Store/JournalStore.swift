@@ -5,8 +5,11 @@ import SwiftData
 ///
 /// 画面から直接 insert（保存場所へ追加）せず、ここを通す。
 /// 同じ端末の通常の使い方では、1日1枚、1か月1枚をここで守る。同じ日付がすでにあれば、新しくは作らない。
-/// 同期や別の処理で重複ができたときは、中身があるものを優先し、その中で一番古いものを使う。削除はしない。
-/// 習慣のチェックだけ、同じ組み合わせの重複を全部消す（T-106）。
+/// ページの重複は、中身があるものを優先し、その中で一番古いものを使う。ページの重複は消さない。
+/// 1行・気分・睡眠の重複は、書くとき更新時刻が一番新しいものを使う。同時刻なら id の文字順が大きい方。空にすると、その日の分を全部消す。
+/// 同じ値をもう一度書いても、何もしない。
+/// 習慣のチェックは、同じ組み合わせが複数あれば全部消す。
+/// タスクの進み具合（`progress`）は、画面から直接書かない。必ず `cycleProgress` を使う。
 /// ModelContext（読み書きの窓口）を作ったスレッドから使う前提。
 /// 保存に失敗したときは、未保存の変更を取り消してから、そのエラーをそのまま投げる。握りつぶさない。`fatalError` にもしない。
 final class JournalStore {
@@ -15,16 +18,25 @@ final class JournalStore {
 
     /// 履歴や更新時刻に使う「今」。
     ///
-    /// 1回の操作では、このクロージャを1回だけ呼ぶ。
+    /// 変化がある操作では、このクロージャを1回だけ呼ぶ。同じ値の書き込みなど、変化が無いときは呼ばない。
     private let currentDate: () -> Date
+
+    /// 実際の保存。テストでは、失敗させるために差し替えられる。
+    private let persist: (ModelContext) throws -> Void
 
     /// 保存の入れ物から作った context（読み書きの窓口）を渡す。
     ///
-    /// `now` は最後の引数で、省略できる。既存の `JournalStore(context:)` はそのまま動く。
-    /// 省略したときは、呼ぶたびに `Date.now` を返す。
-    init(context: ModelContext, now: @escaping () -> Date = { Date.now }) {
+    /// `now` と `save` は省略できる。既存の `JournalStore(context:)` と `JournalStore(context:now:)` はそのまま動く。
+    /// `now` を省略したときは、呼ぶたびに `Date.now` を返す。
+    /// `save` を省略したときは、その context の `save()` を使う。
+    init(
+        context: ModelContext,
+        now: @escaping () -> Date = { Date.now },
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.context = context
         self.currentDate = now
+        self.persist = save
     }
 
     /// 手帳が1冊もなければ1冊作る。初回起動用。
@@ -250,7 +262,7 @@ final class JournalStore {
     /// `rollback()` は context 全体に効く。呼び出し側の未保存の編集も消える。
     private func saveOrRollback() throws {
         do {
-            try context.save()
+            try persist(context)
         } catch {
             context.rollback()
             throw error
@@ -280,6 +292,8 @@ enum JournalStoreError: Error, Equatable {
     case invalidSleepHours(Double)
     /// その ID の習慣が無い。
     case habitNotFound(UUID)
+    /// 習慣が属する月と、記録する日の月が違う。
+    case habitMonthMismatch(habitID: UUID, dateKey: String)
     /// タスク名が、前後の空白と改行を除くと空。
     case emptyTitle
     /// その ID のタスクが無い。
@@ -289,13 +303,11 @@ enum JournalStoreError: Error, Equatable {
 // MARK: - 日ごとの記録
 
 extension JournalStore {
-    /// 月ページの、その日の1行を書く。
+    /// その日の1行。無ければ nil。
     ///
-    /// 前後の空白と改行を除いて空なら、その行を消す。無ければ何も作らない。
-    /// 空でなければ、入力の文字はそのまま保存する（前後の空白は削らない）。
-    /// 同じ日が複数あるときは、更新時刻が一番古いものだけを使う。ほかは消さない。
-    /// 同時刻なら、id の文字順が小さい方。
-    func setLogLine(dateKey: String, text: String) throws {
+    /// 同じ日が複数あるときは、更新時刻が一番新しいもの。同時刻なら id の文字順が大きい方。
+    /// 書くときも、この関数でどれを使うか決める。
+    func logLine(dateKey: String) throws -> MonthlyLogLine? {
         guard DateKey.isValidDayKey(dateKey) else {
             throw JournalStoreError.invalidDayKey(dateKey)
         }
@@ -303,42 +315,93 @@ extension JournalStore {
         let sameDay = stored.filter { line in
             line.dateKey == dateKey
         }
-        let chosen = oldest(
+        return latest(
             in: sameDay,
             updatedAt: { line in line.updatedAt },
             identifier: { line in line.id }
         )
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            if let chosen {
-                context.delete(chosen)
-                try saveOrRollback()
-            }
-            return
-        }
-        guard let monthKey = DateKey.monthKey(ofDayKey: dateKey) else {
+    }
+
+    /// その日の気分。無ければ nil。選び方は `logLine` と同じ。
+    func mood(dateKey: String) throws -> MoodEntry? {
+        guard DateKey.isValidDayKey(dateKey) else {
             throw JournalStoreError.invalidDayKey(dateKey)
         }
-        let monthly = try findOrCreateMonthly(monthKey: monthKey)
-        let instant = currentDate()
-        if let chosen {
-            chosen.text = text
-            chosen.updatedAt = instant
-        } else {
-            let line = MonthlyLogLine(
-                dateKey: dateKey,
-                text: text,
-                updatedAt: instant
-            )
-            context.insert(line)
-            line.monthly = monthly
+        let stored = try context.fetch(FetchDescriptor<MoodEntry>())
+        let sameDay = stored.filter { entry in
+            entry.dateKey == dateKey
         }
+        return latest(
+            in: sameDay,
+            updatedAt: { entry in entry.updatedAt },
+            identifier: { entry in entry.id }
+        )
+    }
+
+    /// その日の睡眠。無ければ nil。選び方は `logLine` と同じ。
+    ///
+    /// 日付は「起きた日」の想定（夜に寝て翌朝起きたなら、朝の日付）。
+    func sleep(dateKey: String) throws -> SleepEntry? {
+        guard DateKey.isValidDayKey(dateKey) else {
+            throw JournalStoreError.invalidDayKey(dateKey)
+        }
+        let stored = try context.fetch(FetchDescriptor<SleepEntry>())
+        let sameDay = stored.filter { entry in
+            entry.dateKey == dateKey
+        }
+        return latest(
+            in: sameDay,
+            updatedAt: { entry in entry.updatedAt },
+            identifier: { entry in entry.id }
+        )
+    }
+
+    /// 月ページの、その日の1行を書く。
+    ///
+    /// 前後の空白と改行を除いて空なら、その日の行を全部消す。無ければ何も作らない。
+    /// 空でなければ、入力の文字はそのまま保存する（前後の空白は削らない）。
+    /// 今の文字と同じなら、何もしない（保存も、更新時刻も変えない）。
+    /// 同じ日が複数あるときは、`logLine` と同じ1件だけを書き換える。
+    func setLogLine(dateKey: String, text: String) throws {
+        guard DateKey.isValidDayKey(dateKey) else {
+            throw JournalStoreError.invalidDayKey(dateKey)
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            try deleteLogLines(on: dateKey)
+            return
+        }
+        if let chosen = try logLine(dateKey: dateKey) {
+            if chosen.text == text {
+                return
+            }
+            guard let monthOfDay = DateKey.monthKey(ofDayKey: dateKey) else {
+                throw JournalStoreError.invalidDayKey(dateKey)
+            }
+            _ = try findOrCreateMonthly(monthKey: monthOfDay)
+            chosen.text = text
+            chosen.updatedAt = currentDate()
+            try saveOrRollback()
+            return
+        }
+        guard let monthOfDay = DateKey.monthKey(ofDayKey: dateKey) else {
+            throw JournalStoreError.invalidDayKey(dateKey)
+        }
+        let monthly = try findOrCreateMonthly(monthKey: monthOfDay)
+        let line = MonthlyLogLine(
+            dateKey: dateKey,
+            text: text,
+            updatedAt: currentDate()
+        )
+        context.insert(line)
+        line.monthly = monthly
         try saveOrRollback()
     }
 
-    /// その日の気分を書く。1〜5。nil なら消す。
+    /// その日の気分を書く。1〜5。nil なら、その日の分を全部消す。
     ///
-    /// Daily（その日のページ）は作らない。同じ日が複数あるときは、一番古い1件だけを更新または削除する。
+    /// Daily（その日のページ）は作らない。今と同じ値なら、何もしない。
+    /// 同じ日が複数あるときは、`mood` と同じ1件だけを書き換える。
     func setMood(dateKey: String, level: Int?) throws {
         guard DateKey.isValidDayKey(dateKey) else {
             throw JournalStoreError.invalidDayKey(dateKey)
@@ -348,42 +411,33 @@ extension JournalStore {
                 throw JournalStoreError.invalidMoodLevel(moodLevel)
             }
         }
-        let stored = try context.fetch(FetchDescriptor<MoodEntry>())
-        let sameDay = stored.filter { entry in
-            entry.dateKey == dateKey
-        }
-        let chosen = oldest(
-            in: sameDay,
-            updatedAt: { entry in entry.updatedAt },
-            identifier: { entry in entry.id }
-        )
         guard let moodLevel = level else {
-            if let chosen {
-                context.delete(chosen)
-                try saveOrRollback()
-            }
+            try deleteMoods(on: dateKey)
             return
         }
-        let instant = currentDate()
-        if let chosen {
+        if let chosen = try mood(dateKey: dateKey) {
+            if chosen.level == moodLevel {
+                return
+            }
             chosen.level = moodLevel
-            chosen.updatedAt = instant
-        } else {
-            let entry = MoodEntry(
-                dateKey: dateKey,
-                level: moodLevel,
-                updatedAt: instant
-            )
-            context.insert(entry)
+            chosen.updatedAt = currentDate()
+            try saveOrRollback()
+            return
         }
+        let entry = MoodEntry(
+            dateKey: dateKey,
+            level: moodLevel,
+            updatedAt: currentDate()
+        )
+        context.insert(entry)
         try saveOrRollback()
     }
 
-    /// 睡眠時間を書く。nil なら消す。
+    /// 睡眠時間を書く。nil なら、その日の分を全部消す。
     ///
     /// 日付は「起きた日」の想定（夜に寝て翌朝起きたなら、朝の日付）。
     /// 0.5〜24 時間で、0.5 きざみだけ。Daily（その日のページ）は作らない。
-    /// 同じ日が複数あるときは、一番古い1件だけを更新または削除する。
+    /// 今と同じ値なら、何もしない。同じ日が複数あるときは、`sleep` と同じ1件だけを書き換える。
     func setSleep(dateKey: String, hours: Double?) throws {
         guard DateKey.isValidDayKey(dateKey) else {
             throw JournalStoreError.invalidDayKey(dateKey)
@@ -393,51 +447,50 @@ extension JournalStore {
                 throw JournalStoreError.invalidSleepHours(sleepHours)
             }
         }
-        let stored = try context.fetch(FetchDescriptor<SleepEntry>())
-        let sameDay = stored.filter { entry in
-            entry.dateKey == dateKey
-        }
-        let chosen = oldest(
-            in: sameDay,
-            updatedAt: { entry in entry.updatedAt },
-            identifier: { entry in entry.id }
-        )
         guard let sleepHours = hours else {
-            if let chosen {
-                context.delete(chosen)
-                try saveOrRollback()
-            }
+            try deleteSleeps(on: dateKey)
             return
         }
-        let instant = currentDate()
-        if let chosen {
+        if let chosen = try sleep(dateKey: dateKey) {
+            if chosen.hours == sleepHours {
+                return
+            }
             chosen.hours = sleepHours
-            chosen.updatedAt = instant
-        } else {
-            let entry = SleepEntry(
-                dateKey: dateKey,
-                hours: sleepHours,
-                updatedAt: instant
-            )
-            context.insert(entry)
+            chosen.updatedAt = currentDate()
+            try saveOrRollback()
+            return
         }
+        let entry = SleepEntry(
+            dateKey: dateKey,
+            hours: sleepHours,
+            updatedAt: currentDate()
+        )
+        context.insert(entry)
         try saveOrRollback()
     }
 
     /// 習慣のチェックを付ける、または外す。付けたら true、外したら false。
     ///
-    /// 同じ習慣・同じ日が複数あるときは、全部消して false を返す。重複を消すのはこの場合だけ。
+    /// 同じ習慣・同じ日が複数あるときは、全部消して false を返す。
+    /// 習慣に月が付いていて、その月と日付の月が違うときはエラー。月が無い習慣は、どの日でもよい。
     /// Daily（その日のページ）は作らない。
     func toggleHabit(habitID: UUID, dateKey: String) throws -> Bool {
         guard DateKey.isValidDayKey(dateKey) else {
             throw JournalStoreError.invalidDayKey(dateKey)
         }
         let habits = try context.fetch(FetchDescriptor<Habit>())
-        let habitExists = habits.contains { habit in
-            habit.id == habitID
-        }
-        if habitExists == false {
+        guard let habit = habits.first(where: { candidate in
+            candidate.id == habitID
+        }) else {
             throw JournalStoreError.habitNotFound(habitID)
+        }
+        if let habitMonth = habit.monthly?.monthKey {
+            guard let monthOfDay = DateKey.monthKey(ofDayKey: dateKey) else {
+                throw JournalStoreError.invalidDayKey(dateKey)
+            }
+            if habitMonth != monthOfDay {
+                throw JournalStoreError.habitMonthMismatch(habitID: habitID, dateKey: dateKey)
+            }
         }
         let stored = try context.fetch(FetchDescriptor<HabitEntry>())
         let matches = stored.filter { entry in
@@ -574,6 +627,7 @@ extension JournalStore {
     /// タスクを消す。履歴は残す。繰越の相手がいれば、相手側の ID だけを空にする。
     ///
     /// 相手の「繰越済み」は変えない。相手の履歴は増やさない。
+    /// 相手の ID を空にするのは、その ID が今消すタスクを指しているときだけ。
     /// 履歴の追加、相手の ID、削除は、最後の1回の保存でまとめる。
     func deleteTask(taskID: UUID) throws {
         guard let found = try storedTask(matchingID: taskID) else {
@@ -583,6 +637,10 @@ extension JournalStore {
         let fromProgress = found.progress
         let sourceID = found.carriedFromTaskID
         let destinationID = found.carriedToTaskID
+        // 先に探す。ここまでが、失敗しうる処理。
+        let source = try sourceID.flatMap { try storedTask(matchingID: $0) }
+        let destination = try destinationID.flatMap { try storedTask(matchingID: $0) }
+        // ここから先は、保存の直前まで失敗しない。
         let instant = currentDate()
         appendHistory(
             taskID: removedID,
@@ -591,19 +649,11 @@ extension JournalStore {
             toProgress: nil,
             at: instant
         )
-        if let sourceID {
-            if let source = try storedTask(matchingID: sourceID) {
-                if source.id != removedID {
-                    source.carriedToTaskID = nil
-                }
-            }
+        if let source, source.id != removedID, source.carriedToTaskID == removedID {
+            source.carriedToTaskID = nil
         }
-        if let destinationID {
-            if let destination = try storedTask(matchingID: destinationID) {
-                if destination.id != removedID {
-                    destination.carriedFromTaskID = nil
-                }
-            }
+        if let destination, destination.id != removedID, destination.carriedFromTaskID == removedID {
+            destination.carriedFromTaskID = nil
         }
         context.delete(found)
         try saveOrRollback()
@@ -611,6 +661,7 @@ extension JournalStore {
 
     /// 記号タップ1回ぶん、進み具合を進める。繰越済みなら、今のまま返して履歴は増やさない。
     ///
+    /// 進み具合（`progress`）は、画面から直接書かない。必ずこの関数を使う。
     /// 完了になったら完了時刻を入れる。完了から外れたら、完了時刻を空にする。
     func cycleProgress(taskID: UUID) throws -> TaskProgress {
         guard let found = try storedTask(matchingID: taskID) else {
@@ -649,13 +700,13 @@ extension JournalStore {
     // 検索に `#Predicate`（検索条件）は使わない。モデルを全部取り、Swift で日付などを比べる。
     // Optional の項目を `#Predicate` に入れる書き方は、ここでは使わない。
 
-    /// 更新時刻が一番古いもの。同時刻なら id の文字順が小さい方。空なら nil。
-    private func oldest<Record>(
+    /// 更新時刻が一番新しいもの。同時刻なら id の文字順が大きい方。空なら nil。
+    private func latest<Record>(
         in records: [Record],
         updatedAt updatedAtOf: (Record) -> Date,
         identifier identifierOf: (Record) -> UUID
     ) -> Record? {
-        records.min { lhs, rhs in
+        records.max { lhs, rhs in
             isBefore(
                 updatedAtOf(lhs),
                 identifierOf(lhs),
@@ -663,6 +714,44 @@ extension JournalStore {
                 identifierOf(rhs)
             )
         }
+    }
+
+    /// その日の1行を全部消す。無ければ何もしない。
+    private func deleteLogLines(on dateKey: String) throws {
+        let stored = try context.fetch(FetchDescriptor<MonthlyLogLine>())
+        let sameDay = stored.filter { line in
+            line.dateKey == dateKey
+        }
+        try deleteAll(sameDay)
+    }
+
+    /// その日の気分を全部消す。無ければ何もしない。
+    private func deleteMoods(on dateKey: String) throws {
+        let stored = try context.fetch(FetchDescriptor<MoodEntry>())
+        let sameDay = stored.filter { entry in
+            entry.dateKey == dateKey
+        }
+        try deleteAll(sameDay)
+    }
+
+    /// その日の睡眠を全部消す。無ければ何もしない。
+    private func deleteSleeps(on dateKey: String) throws {
+        let stored = try context.fetch(FetchDescriptor<SleepEntry>())
+        let sameDay = stored.filter { entry in
+            entry.dateKey == dateKey
+        }
+        try deleteAll(sameDay)
+    }
+
+    /// 渡された記録を全部消して、1回だけ保存する。空なら保存しない。
+    private func deleteAll<Record: PersistentModel>(_ records: [Record]) throws {
+        if records.isEmpty {
+            return
+        }
+        for record in records {
+            context.delete(record)
+        }
+        try saveOrRollback()
     }
 
     /// 0.5 以上 24 以下で、0.5 きざみのときだけ true。
@@ -699,7 +788,9 @@ extension JournalStore {
     }
 
     /// その日のページに付いているタスク。保存済みと、ページ側の一覧の両方を見る。
-    private func tasks(onDaily page: DailyPage) throws -> [JournalTask] {
+    ///
+    /// 並びは sortOrder、同じなら作った時刻、それも同じなら id の文字順。順番は毎回同じ。
+    func tasks(onDaily page: DailyPage) throws -> [JournalTask] {
         var gathered: [UUID: JournalTask] = [:]
         let stored = try context.fetch(FetchDescriptor<JournalTask>())
         for candidate in stored {
@@ -711,11 +802,13 @@ extension JournalStore {
         for candidate in listed {
             gathered[candidate.id] = candidate
         }
-        return Array(gathered.values)
+        return sortedTasks(Array(gathered.values))
     }
 
     /// その月のページに付いているタスク。保存済みと、ページ側の一覧の両方を見る。
-    private func tasks(onMonthly page: MonthlyPage) throws -> [JournalTask] {
+    ///
+    /// 並びは sortOrder、同じなら作った時刻、それも同じなら id の文字順。順番は毎回同じ。
+    func tasks(onMonthly page: MonthlyPage) throws -> [JournalTask] {
         var gathered: [UUID: JournalTask] = [:]
         let stored = try context.fetch(FetchDescriptor<JournalTask>())
         for candidate in stored {
@@ -727,14 +820,27 @@ extension JournalStore {
         for candidate in listed {
             gathered[candidate.id] = candidate
         }
-        return Array(gathered.values)
+        return sortedTasks(Array(gathered.values))
+    }
+
+    /// sortOrder、作った時刻、id の文字順。小さい方を先にする。
+    private func sortedTasks(_ items: [JournalTask]) -> [JournalTask] {
+        items.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder {
+                return lhs.sortOrder < rhs.sortOrder
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
     }
 
     /// 並び順。タスクが無ければ 0。あれば最大 + 1。
     ///
     /// 最大が Int の上限のときは、その値のままにする。足すと落ちるため。
-    private func nextSortOrder(among tasks: [JournalTask]) -> Int {
-        guard let highest = tasks.map({ candidate in candidate.sortOrder }).max() else {
+    private func nextSortOrder(among items: [JournalTask]) -> Int {
+        guard let highest = items.map({ candidate in candidate.sortOrder }).max() else {
             return 0
         }
         if highest == Int.max {

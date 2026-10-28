@@ -88,10 +88,10 @@ final class JournalStoreRecordsTests: XCTestCase {
         })
     }
 
-    /// 同じ日が2件あるとき、更新時刻が古い方だけを書き換える。新しい方は残す。
+    /// 同じ日が2件あるとき、更新時刻が新しい方だけを書き換える。古い方は残す。
     ///
-    /// 古い方の id の文字順は、新しい方より大きい。時刻で選んでいることを見る。
-    func testSetLogLineDuplicateUpdatesOldest() throws {
+    /// 新しい方の id の文字順は、古い方より小さい。時刻で選んでいることを見る。
+    func testSetLogLineDuplicateUpdatesLatest() throws {
         guard let olderID = uuid("00000000-0000-0000-0000-00000000000B"),
               let newerID = uuid("00000000-0000-0000-0000-00000000000A") else {
             return
@@ -114,6 +114,7 @@ final class JournalStoreRecordsTests: XCTestCase {
         context.insert(older)
         try context.save()
 
+        XCTAssertEqual(try store.logLine(dateKey: "2026-10-27")?.id, newerID)
         try store.setLogLine(dateKey: "2026-10-27", text: "更新")
         let lines = try context.fetch(FetchDescriptor<MonthlyLogLine>())
         XCTAssertEqual(lines.count, 2)
@@ -123,14 +124,15 @@ final class JournalStoreRecordsTests: XCTestCase {
         let storedNewer = lines.first { line in
             line.id == newerID
         }
-        XCTAssertEqual(storedOlder?.text, "更新")
-        XCTAssertEqual(storedOlder?.updatedAt, fixedNow)
-        XCTAssertEqual(storedNewer?.text, "新しい")
-        XCTAssertEqual(storedNewer?.updatedAt, Date(timeIntervalSince1970: 2_000))
+        XCTAssertEqual(storedNewer?.text, "更新")
+        XCTAssertEqual(storedNewer?.updatedAt, fixedNow)
+        XCTAssertEqual(storedOlder?.text, "古い")
+        XCTAssertEqual(storedOlder?.updatedAt, Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(try store.logLine(dateKey: "2026-10-27")?.id, newerID)
     }
 
-    /// 更新時刻が同じ2件は、id の文字順が小さい方を書き換える。
-    func testSetLogLineDuplicateSameTimeUpdatesSmallerID() throws {
+    /// 更新時刻が同じ2件は、id の文字順が大きい方を書き換える。
+    func testSetLogLineDuplicateSameTimeUpdatesLargerID() throws {
         guard let smallerID = uuid("00000000-0000-0000-0000-00000000000A"),
               let largerID = uuid("00000000-0000-0000-0000-00000000000B") else {
             return
@@ -154,6 +156,7 @@ final class JournalStoreRecordsTests: XCTestCase {
         context.insert(smaller)
         try context.save()
 
+        XCTAssertEqual(try store.logLine(dateKey: "2026-10-27")?.id, largerID)
         try store.setLogLine(dateKey: "2026-10-27", text: "選ばれた")
         let lines = try context.fetch(FetchDescriptor<MonthlyLogLine>())
         XCTAssertEqual(lines.count, 2)
@@ -163,13 +166,13 @@ final class JournalStoreRecordsTests: XCTestCase {
         let storedLarger = lines.first { line in
             line.id == largerID
         }
-        XCTAssertEqual(storedSmaller?.text, "選ばれた")
-        XCTAssertEqual(storedLarger?.text, "大きい")
-        XCTAssertEqual(storedLarger?.updatedAt, sameTime)
+        XCTAssertEqual(storedLarger?.text, "選ばれた")
+        XCTAssertEqual(storedSmaller?.text, "小さい")
+        XCTAssertEqual(storedSmaller?.updatedAt, sameTime)
     }
 
-    /// 空文字で消すときも、一番古い1件だけ。もう1件は残す。月ページは作らない。
-    func testSetLogLineBlankDeletesOnlyOldestDuplicate() throws {
+    /// 空文字で消すときは、その日の行を全部消す。別の日は残す。月ページは作らない。
+    func testSetLogLineBlankDeletesAllDuplicates() throws {
         guard let olderID = uuid("00000000-0000-0000-0000-00000000000B"),
               let newerID = uuid("00000000-0000-0000-0000-00000000000A") else {
             return
@@ -187,15 +190,22 @@ final class JournalStoreRecordsTests: XCTestCase {
             text: "新しい",
             updatedAt: Date(timeIntervalSince1970: 2_000)
         )
+        let otherDay = MonthlyLogLine(
+            dateKey: "2026-10-28",
+            text: "別の日",
+            updatedAt: Date(timeIntervalSince1970: 3_000)
+        )
         context.insert(older)
         context.insert(newer)
+        context.insert(otherDay)
         try context.save()
 
         try store.setLogLine(dateKey: "2026-10-27", text: " \n ")
         let lines = try context.fetch(FetchDescriptor<MonthlyLogLine>())
         XCTAssertEqual(lines.count, 1)
-        XCTAssertEqual(lines.first?.id, newerID)
-        XCTAssertEqual(lines.first?.text, "新しい")
+        XCTAssertEqual(lines.first?.dateKey, "2026-10-28")
+        XCTAssertEqual(lines.first?.text, "別の日")
+        XCTAssertNil(try store.logLine(dateKey: "2026-10-27"))
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyPage>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Journal>()), 0)
     }
@@ -458,6 +468,233 @@ final class JournalStoreRecordsTests: XCTestCase {
         let remainingSleep = try after.fetch(FetchDescriptor<SleepEntry>())
         XCTAssertEqual(remainingSleep.count, 1)
         XCTAssertEqual(remainingSleep.first?.hours, 7.5)
+    }
+
+    /// 重複があっても、2回書いても対象は入れ替わらない。同じ値の2回目は更新時刻を変えない。
+    func testRepeatedDuplicateWritesStayOnTheLatest() throws {
+        guard let olderID = uuid("00000000-0000-0000-0000-00000000000A"),
+              let newerID = uuid("00000000-0000-0000-0000-00000000000B") else {
+            return
+        }
+        var tick = 0
+        let origin = Date(timeIntervalSince1970: 1_800_000_000)
+        let (store, context, _) = try makeStore(now: {
+            let instant = Date(timeIntervalSince1970: origin.timeIntervalSince1970 + Double(tick))
+            tick += 1
+            return instant
+        })
+        let olderLine = MonthlyLogLine(
+            id: olderID,
+            dateKey: "2026-10-27",
+            text: "古い行",
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let newerLine = MonthlyLogLine(
+            id: newerID,
+            dateKey: "2026-10-27",
+            text: "新しい行",
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+        let olderMood = MoodEntry(
+            id: olderID,
+            dateKey: "2026-10-28",
+            level: 1,
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let newerMood = MoodEntry(
+            id: newerID,
+            dateKey: "2026-10-28",
+            level: 2,
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+        let olderSleep = SleepEntry(
+            id: olderID,
+            dateKey: "2026-10-29",
+            hours: 6.0,
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let newerSleep = SleepEntry(
+            id: newerID,
+            dateKey: "2026-10-29",
+            hours: 7.0,
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+        context.insert(olderLine)
+        context.insert(newerLine)
+        context.insert(olderMood)
+        context.insert(newerMood)
+        context.insert(olderSleep)
+        context.insert(newerSleep)
+        try context.save()
+
+        try store.setLogLine(dateKey: "2026-10-27", text: "いち")
+        XCTAssertEqual(tick, 1)
+        try store.setLogLine(dateKey: "2026-10-27", text: "いち")
+        XCTAssertEqual(tick, 1)
+        try store.setLogLine(dateKey: "2026-10-27", text: "に")
+        XCTAssertEqual(tick, 2)
+
+        try store.setMood(dateKey: "2026-10-28", level: 4)
+        XCTAssertEqual(tick, 3)
+        try store.setMood(dateKey: "2026-10-28", level: 4)
+        XCTAssertEqual(tick, 3)
+        try store.setMood(dateKey: "2026-10-28", level: 5)
+        XCTAssertEqual(tick, 4)
+
+        try store.setSleep(dateKey: "2026-10-29", hours: 7.5)
+        XCTAssertEqual(tick, 5)
+        try store.setSleep(dateKey: "2026-10-29", hours: 7.5)
+        XCTAssertEqual(tick, 5)
+        try store.setSleep(dateKey: "2026-10-29", hours: 8.0)
+        XCTAssertEqual(tick, 6)
+
+        let lines = try context.fetch(FetchDescriptor<MonthlyLogLine>())
+        XCTAssertEqual(lines.first { line in line.id == newerID }?.text, "に")
+        XCTAssertEqual(lines.first { line in line.id == newerID }?.updatedAt, Date(timeIntervalSince1970: origin.timeIntervalSince1970 + 1))
+        XCTAssertEqual(lines.first { line in line.id == olderID }?.text, "古い行")
+        XCTAssertEqual(try store.logLine(dateKey: "2026-10-27")?.id, newerID)
+
+        let moods = try context.fetch(FetchDescriptor<MoodEntry>())
+        XCTAssertEqual(moods.first { entry in entry.id == newerID }?.level, 5)
+        XCTAssertEqual(moods.first { entry in entry.id == olderID }?.level, 1)
+        XCTAssertEqual(try store.mood(dateKey: "2026-10-28")?.id, newerID)
+
+        let sleeps = try context.fetch(FetchDescriptor<SleepEntry>())
+        XCTAssertEqual(sleeps.first { entry in entry.id == newerID }?.hours, 8.0)
+        XCTAssertEqual(sleeps.first { entry in entry.id == olderID }?.hours, 6.0)
+        XCTAssertEqual(try store.sleep(dateKey: "2026-10-29")?.id, newerID)
+    }
+
+    /// 今と同じ値なら、保存も更新時刻も変えない。月ページも新しくは作らない。
+    func testSameValueDoesNotUpdateOrSave() throws {
+        var tick = 0
+        let origin = Date(timeIntervalSince1970: 1_810_000_000)
+        let (store, context, _) = try makeStore(now: {
+            let instant = Date(timeIntervalSince1970: origin.timeIntervalSince1970 + Double(tick))
+            tick += 1
+            return instant
+        })
+        let originalTime = Date(timeIntervalSince1970: 4_000)
+        let line = MonthlyLogLine(
+            dateKey: "2026-10-27",
+            text: "そのまま",
+            updatedAt: originalTime
+        )
+        context.insert(line)
+        try context.save()
+
+        try store.setLogLine(dateKey: "2026-10-27", text: "そのまま")
+        XCTAssertEqual(tick, 0)
+        XCTAssertEqual(line.updatedAt, originalTime)
+        XCTAssertEqual(line.text, "そのまま")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyPage>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Journal>()), 0)
+
+        try store.setMood(dateKey: "2026-10-28", level: 3)
+        XCTAssertEqual(tick, 1)
+        try store.setMood(dateKey: "2026-10-28", level: 3)
+        XCTAssertEqual(tick, 1)
+        let mood = try store.mood(dateKey: "2026-10-28")
+        XCTAssertEqual(mood?.level, 3)
+        XCTAssertEqual(mood?.updatedAt, origin)
+
+        try store.setSleep(dateKey: "2026-10-29", hours: 8.0)
+        XCTAssertEqual(tick, 2)
+        try store.setSleep(dateKey: "2026-10-29", hours: 8.0)
+        XCTAssertEqual(tick, 2)
+        let sleep = try store.sleep(dateKey: "2026-10-29")
+        XCTAssertEqual(sleep?.hours, 8.0)
+        XCTAssertEqual(sleep?.updatedAt, Date(timeIntervalSince1970: origin.timeIntervalSince1970 + 1))
+        try assertNoPage(in: context)
+    }
+
+    /// nil で消すと、その日の気分と睡眠の重複は全部消える。別の日は残る。
+    func testNilClearsAllDuplicateMoodsAndSleep() throws {
+        let (store, context, _) = try makeStore()
+        let moods = [
+            MoodEntry(dateKey: "2026-10-27", level: 1, updatedAt: Date(timeIntervalSince1970: 1_000)),
+            MoodEntry(dateKey: "2026-10-27", level: 2, updatedAt: Date(timeIntervalSince1970: 2_000)),
+            MoodEntry(dateKey: "2026-10-28", level: 5, updatedAt: Date(timeIntervalSince1970: 3_000)),
+        ]
+        let sleeps = [
+            SleepEntry(dateKey: "2026-10-27", hours: 6.0, updatedAt: Date(timeIntervalSince1970: 1_000)),
+            SleepEntry(dateKey: "2026-10-27", hours: 7.0, updatedAt: Date(timeIntervalSince1970: 2_000)),
+            SleepEntry(dateKey: "2026-10-28", hours: 8.0, updatedAt: Date(timeIntervalSince1970: 3_000)),
+        ]
+        for entry in moods {
+            context.insert(entry)
+        }
+        for entry in sleeps {
+            context.insert(entry)
+        }
+        try context.save()
+
+        try store.setMood(dateKey: "2026-10-27", level: nil)
+        try store.setSleep(dateKey: "2026-10-27", hours: nil)
+
+        let storedMoods = try context.fetch(FetchDescriptor<MoodEntry>())
+        XCTAssertEqual(storedMoods.count, 1)
+        XCTAssertEqual(storedMoods.first?.dateKey, "2026-10-28")
+        XCTAssertEqual(storedMoods.first?.level, 5)
+        XCTAssertNil(try store.mood(dateKey: "2026-10-27"))
+
+        let storedSleeps = try context.fetch(FetchDescriptor<SleepEntry>())
+        XCTAssertEqual(storedSleeps.count, 1)
+        XCTAssertEqual(storedSleeps.first?.dateKey, "2026-10-28")
+        XCTAssertEqual(storedSleeps.first?.hours, 8.0)
+        XCTAssertNil(try store.sleep(dateKey: "2026-10-27"))
+    }
+
+    /// 全角空白だけの1行は消える。それだけを空の日に書いても、行は作られない。
+    func testFullwidthSpaceDeletesLogLine() throws {
+        let (store, context, _) = try makeStore()
+        try store.setLogLine(dateKey: "2026-10-27", text: "ある")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 1)
+        try store.setLogLine(dateKey: "2026-10-27", text: "　")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 0)
+
+        try store.setLogLine(dateKey: "2026-10-28", text: "　")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 0)
+        XCTAssertNil(try store.logLine(dateKey: "2026-10-28"))
+    }
+
+    /// 習慣の月と、記録する日の月が違うときはエラー。月が無い習慣は記録できる。
+    func testToggleHabitRejectsMonthMismatch() throws {
+        let (store, context, _) = try makeStore()
+        let monthly = try store.findOrCreateMonthly(monthKey: "2026-10")
+        let habit = Habit(name: "水", shortLabel: "水")
+        context.insert(habit)
+        habit.monthly = monthly
+        try context.save()
+
+        XCTAssertThrowsError(try store.toggleHabit(habitID: habit.id, dateKey: "2026-11-03")) { error in
+            XCTAssertEqual(
+                error as? JournalStoreError,
+                .habitMonthMismatch(habitID: habit.id, dateKey: "2026-11-03")
+            )
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HabitEntry>()), 0)
+
+        let turnedOn = try store.toggleHabit(habitID: habit.id, dateKey: "2026-10-27")
+        XCTAssertTrue(turnedOn)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HabitEntry>()), 1)
+
+        XCTAssertThrowsError(try store.toggleHabit(habitID: habit.id, dateKey: "2026-11-03")) { error in
+            XCTAssertEqual(
+                error as? JournalStoreError,
+                .habitMonthMismatch(habitID: habit.id, dateKey: "2026-11-03")
+            )
+        }
+        let entries = try context.fetch(FetchDescriptor<HabitEntry>())
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.dateKey, "2026-10-27")
+
+        let freeHabit = Habit(name: "自由", shortLabel: "自")
+        context.insert(freeHabit)
+        try context.save()
+        let freeOn = try store.toggleHabit(habitID: freeHabit.id, dateKey: "2026-11-03")
+        XCTAssertTrue(freeOn)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<HabitEntry>()), 2)
     }
 
     // MARK: - ヘルパー

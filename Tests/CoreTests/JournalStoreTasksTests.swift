@@ -492,6 +492,320 @@ final class JournalStoreTasksTests: XCTestCase {
         XCTAssertEqual(histories.first?.toProgressRaw, TaskProgress.open.rawValue)
     }
 
+    /// 保存が失敗したら、削除は取り消される。履歴の件数も、別の窓口から見た中身も変わらない。
+    func testDeleteTaskRollsBackWhenSaveThrows() throws {
+        let flag = ThrowSwitch()
+        let (store, context, container) = try makeThrowingStore(shouldThrow: { flag.isOn })
+        let task = try store.addDailyTask(dateKey: "2026-10-27", title: "残る")
+        let taskID = task.id
+        let historyBefore = try context.fetchCount(FetchDescriptor<TaskHistory>())
+        XCTAssertEqual(historyBefore, 1)
+        flag.isOn = true
+
+        XCTAssertThrowsError(try store.deleteTask(taskID: taskID)) { error in
+            XCTAssertEqual(error as? ForcedSaveError, .forced)
+        }
+        XCTAssertFalse(context.hasChanges)
+        let tasks = try context.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(tasks.first?.id, taskID)
+        XCTAssertEqual(tasks.first?.title, "残る")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore)
+
+        let other = ModelContext(container)
+        let otherTasks = try other.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(otherTasks.count, 1)
+        XCTAssertEqual(otherTasks.first?.id, taskID)
+        XCTAssertEqual(otherTasks.first?.title, "残る")
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore)
+    }
+
+    /// 保存が失敗したら、日のタスク追加は取り消される。ページも履歴も残らない。
+    func testAddDailyTaskRollsBackWhenSaveThrows() throws {
+        let flag = ThrowSwitch()
+        flag.isOn = true
+        let (store, context, container) = try makeThrowingStore(shouldThrow: { flag.isOn })
+
+        XCTAssertThrowsError(try store.addDailyTask(dateKey: "2026-10-27", title: "作られない")) { error in
+            XCTAssertEqual(error as? ForcedSaveError, .forced)
+        }
+        XCTAssertFalse(context.hasChanges)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<JournalTask>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskHistory>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyPage>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Journal>()), 0)
+
+        let other = ModelContext(container)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<JournalTask>()), 0)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<TaskHistory>()), 0)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<DailyPage>()), 0)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<Page>()), 0)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<Journal>()), 0)
+    }
+
+    /// 保存が失敗したら、進み具合の変更は取り消される。履歴は増えない。
+    func testCycleProgressRollsBackWhenSaveThrows() throws {
+        let flag = ThrowSwitch()
+        let (store, context, container) = try makeThrowingStore(shouldThrow: { flag.isOn })
+        let task = try store.addDailyTask(dateKey: "2026-10-27", title: "進まない")
+        let taskID = task.id
+        let historyBefore = try context.fetchCount(FetchDescriptor<TaskHistory>())
+        XCTAssertEqual(historyBefore, 1)
+        flag.isOn = true
+
+        XCTAssertThrowsError(try store.cycleProgress(taskID: taskID)) { error in
+            XCTAssertEqual(error as? ForcedSaveError, .forced)
+        }
+        XCTAssertFalse(context.hasChanges)
+        let tasks = try context.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(tasks.first?.id, taskID)
+        XCTAssertEqual(tasks.first?.progress, .open)
+        XCTAssertEqual(tasks.first?.progressRaw, TaskProgress.open.rawValue)
+        XCTAssertNil(tasks.first?.completedAt)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore)
+
+        let other = ModelContext(container)
+        let otherTasks = try other.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(otherTasks.first?.progressRaw, TaskProgress.open.rawValue)
+        XCTAssertNil(otherTasks.first?.completedAt)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore)
+    }
+
+    /// 2件のうち1件を消しても、もう1件は残る。月のタスクを消しても、日のタスクと月ページは残る。
+    func testDeletingOneTaskLeavesTheOther() throws {
+        let (store, context, container) = try makeStore()
+        let keep = try store.addDailyTask(dateKey: "2026-10-27", title: "残す")
+        let remove = try store.addDailyTask(dateKey: "2026-10-27", title: "消す")
+        let keepID = keep.id
+        let removeID = remove.id
+        try store.deleteTask(taskID: removeID)
+
+        var tasks = try context.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(tasks.first?.id, keepID)
+        XCTAssertEqual(tasks.first?.title, "残す")
+        XCTAssertNil(tasks.first { item in
+            item.id == removeID
+        })
+
+        let monthly = try store.addMonthlyTask(monthKey: "2026-10", title: "月を消す")
+        let monthlyID = monthly.id
+        try store.deleteTask(taskID: monthlyID)
+
+        tasks = try context.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(tasks.first?.id, keepID)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyPage>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyPage>()), 1)
+
+        let other = ModelContext(container)
+        let otherTasks = try other.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(otherTasks.count, 1)
+        XCTAssertEqual(otherTasks.first?.id, keepID)
+        let deleted = try other.fetch(FetchDescriptor<TaskHistory>()).filter { item in
+            item.actionRaw == TaskHistoryAction.deleted.rawValue
+        }
+        XCTAssertEqual(deleted.count, 2)
+        XCTAssertTrue(deleted.contains { item in
+            item.taskID == removeID
+        })
+        XCTAssertTrue(deleted.contains { item in
+            item.taskID == monthlyID
+        })
+    }
+
+    /// 相手が無い、または相手が別のタスクを指しているときは、その ID を空にしない。
+    func testDeleteTaskIgnoresMissingOrUnrelatedPartners() throws {
+        guard let sourceID = uuid("00000000-0000-0000-0000-000000000031"),
+              let removedID = uuid("00000000-0000-0000-0000-000000000032"),
+              let followerID = uuid("00000000-0000-0000-0000-000000000033"),
+              let keeperID = uuid("00000000-0000-0000-0000-000000000034") else {
+            return
+        }
+        let (store, context, container) = try makeStore()
+        let missingFrom = UUID()
+        let missingTo = UUID()
+        let orphan = JournalTask(
+            title: "相手なし",
+            scopeRaw: TaskScope.daily.rawValue,
+            progressRaw: TaskProgress.open.rawValue,
+            isCarriedForward: false,
+            carriedFromTaskID: missingFrom,
+            carriedToTaskID: missingTo,
+            sortOrder: 0,
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            completedAt: nil
+        )
+        context.insert(orphan)
+        try context.save()
+        let orphanID = orphan.id
+        try store.deleteTask(taskID: orphanID)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<JournalTask>()).isEmpty)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskHistory>()), 1)
+
+        let source = JournalTask(
+            id: sourceID,
+            title: "元",
+            scopeRaw: TaskScope.daily.rawValue,
+            progressRaw: TaskProgress.open.rawValue,
+            isCarriedForward: true,
+            carriedFromTaskID: nil,
+            carriedToTaskID: keeperID,
+            sortOrder: 0,
+            createdAt: Date(timeIntervalSince1970: 2_000),
+            completedAt: nil
+        )
+        let removed = JournalTask(
+            id: removedID,
+            title: "消す",
+            scopeRaw: TaskScope.daily.rawValue,
+            progressRaw: TaskProgress.partial.rawValue,
+            isCarriedForward: false,
+            carriedFromTaskID: sourceID,
+            carriedToTaskID: followerID,
+            sortOrder: 1,
+            createdAt: Date(timeIntervalSince1970: 3_000),
+            completedAt: nil
+        )
+        let follower = JournalTask(
+            id: followerID,
+            title: "先",
+            scopeRaw: TaskScope.daily.rawValue,
+            progressRaw: TaskProgress.open.rawValue,
+            isCarriedForward: true,
+            carriedFromTaskID: keeperID,
+            carriedToTaskID: nil,
+            sortOrder: 2,
+            createdAt: Date(timeIntervalSince1970: 4_000),
+            completedAt: nil
+        )
+        let keeper = JournalTask(
+            id: keeperID,
+            title: "別",
+            scopeRaw: TaskScope.monthly.rawValue,
+            progressRaw: TaskProgress.open.rawValue,
+            isCarriedForward: false,
+            carriedFromTaskID: nil,
+            carriedToTaskID: sourceID,
+            sortOrder: 3,
+            createdAt: Date(timeIntervalSince1970: 5_000),
+            completedAt: nil
+        )
+        context.insert(source)
+        context.insert(removed)
+        context.insert(follower)
+        context.insert(keeper)
+        try context.save()
+
+        try store.deleteTask(taskID: removedID)
+
+        let other = ModelContext(container)
+        let tasks = try other.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertNil(tasks.first { item in
+            item.id == removedID
+        })
+        let storedSource = tasks.first { item in
+            item.id == sourceID
+        }
+        let storedFollower = tasks.first { item in
+            item.id == followerID
+        }
+        let storedKeeper = tasks.first { item in
+            item.id == keeperID
+        }
+        XCTAssertEqual(storedSource?.carriedToTaskID, keeperID)
+        XCTAssertEqual(storedSource?.isCarriedForward, true)
+        XCTAssertEqual(storedFollower?.carriedFromTaskID, keeperID)
+        XCTAssertEqual(storedFollower?.isCarriedForward, true)
+        XCTAssertEqual(storedKeeper?.carriedToTaskID, sourceID)
+        XCTAssertEqual(storedKeeper?.title, "別")
+    }
+
+    /// タスクの並びは sortOrder、作った時刻、id の順。上限の並びがあっても、追加で落ちない。
+    func testTaskListOrderAndIntMaxSortOrder() throws {
+        guard let earlyID = uuid("00000000-0000-0000-0000-00000000000A"),
+              let smallerTieID = uuid("00000000-0000-0000-0000-00000000000B"),
+              let largerTieID = uuid("00000000-0000-0000-0000-00000000000C"),
+              let maxID = uuid("00000000-0000-0000-0000-00000000000D"),
+              let maxMonthID = uuid("00000000-0000-0000-0000-00000000000E") else {
+            return
+        }
+        XCTAssertLessThan(smallerTieID.uuidString, largerTieID.uuidString)
+        let (store, context, _) = try makeStore()
+        let first = try store.addDailyTask(dateKey: "2026-10-27", title: "先頭")
+        guard let daily = first.daily else {
+            XCTFail("日ページがありません")
+            return
+        }
+        let tieTime = Date(timeIntervalSince1970: 3_000)
+        let early = makeTask(
+            id: earlyID,
+            title: "早い",
+            sortOrder: 2,
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let smallerTie = makeTask(
+            id: smallerTieID,
+            title: "同じ時刻で小さい",
+            sortOrder: 2,
+            createdAt: tieTime
+        )
+        let largerTie = makeTask(
+            id: largerTieID,
+            title: "同じ時刻で大きい",
+            sortOrder: 2,
+            createdAt: tieTime
+        )
+        let maximum = makeTask(
+            id: maxID,
+            title: "上限",
+            sortOrder: Int.max,
+            createdAt: Date(timeIntervalSince1970: 500)
+        )
+        context.insert(early)
+        context.insert(smallerTie)
+        context.insert(largerTie)
+        context.insert(maximum)
+        early.daily = daily
+        smallerTie.daily = daily
+        largerTie.daily = daily
+        maximum.daily = daily
+        try context.save()
+
+        let ordered = try store.tasks(onDaily: daily)
+        XCTAssertEqual(
+            ordered.map { item in item.id },
+            [first.id, earlyID, smallerTieID, largerTieID, maxID]
+        )
+
+        let added = try store.addDailyTask(dateKey: "2026-10-27", title: "上限の次")
+        XCTAssertEqual(added.sortOrder, Int.max)
+        XCTAssertEqual(maximum.sortOrder, Int.max)
+
+        let monthTask = try store.addMonthlyTask(monthKey: "2026-11", title: "月")
+        guard let monthlyPage = monthTask.monthly else {
+            XCTFail("月ページがありません")
+            return
+        }
+        let maxMonth = makeTask(
+            id: maxMonthID,
+            title: "月の上限",
+            scopeRaw: TaskScope.monthly.rawValue,
+            sortOrder: Int.max,
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        context.insert(maxMonth)
+        maxMonth.monthly = monthlyPage
+        try context.save()
+
+        let monthOrdered = try store.tasks(onMonthly: monthlyPage)
+        XCTAssertEqual(monthOrdered.map { item in item.id }, [monthTask.id, maxMonthID])
+        let addedMonth = try store.addMonthlyTask(monthKey: "2026-11", title: "月の次")
+        XCTAssertEqual(addedMonth.sortOrder, Int.max)
+        XCTAssertEqual(maxMonth.sortOrder, Int.max)
+    }
+
     // MARK: - ヘルパー
 
     private func makeStore(
@@ -520,6 +834,50 @@ final class JournalStoreTasksTests: XCTestCase {
             return nil
         }
         return id
+    }
+
+    private final class ThrowSwitch {
+        var isOn = false
+    }
+
+    private enum ForcedSaveError: Error, Equatable {
+        case forced
+    }
+
+    private func makeThrowingStore(
+        shouldThrow: @escaping () -> Bool
+    ) throws -> (store: JournalStore, context: ModelContext, container: ModelContainer) {
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let instant = fixedNow
+        let store = JournalStore(context: context, now: { instant }, save: { modelContext in
+            if shouldThrow() {
+                throw ForcedSaveError.forced
+            }
+            try modelContext.save()
+        })
+        return (store, context, container)
+    }
+
+    private func makeTask(
+        id: UUID,
+        title: String,
+        scopeRaw: String = TaskScope.daily.rawValue,
+        sortOrder: Int,
+        createdAt: Date
+    ) -> JournalTask {
+        JournalTask(
+            id: id,
+            title: title,
+            scopeRaw: scopeRaw,
+            progressRaw: TaskProgress.open.rawValue,
+            isCarriedForward: false,
+            carriedFromTaskID: nil,
+            carriedToTaskID: nil,
+            sortOrder: sortOrder,
+            createdAt: createdAt,
+            completedAt: nil
+        )
     }
 
     private func assertNoStoredRecords(
