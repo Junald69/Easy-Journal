@@ -1,0 +1,106 @@
+name: Automatic review and merge
+
+# 制御用のコードは main からだけ読み、PR のコードは実行しない。
+# PR作成直後はCI待ちになり、CI完了イベントで自動的に続行する。
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: automatic-review-merge-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: vars.AUTO_REVIEW_MERGE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      result: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 対象PRとCIを確認
+        id: plan
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const automation = require(`${process.env.GITHUB_WORKSPACE}/.github/automation/review-merge.cjs`);
+            const plan = await automation.plan({ github, context, core });
+            core.setOutput('plan', JSON.stringify(plan));
+            core.setOutput('eligible', String(plan.eligible));
+            if (plan.eligible) automation.writePrompt(plan);
+      - name: APIキーの設定を確認
+        if: steps.plan.outputs.eligible == 'true'
+        env:
+          REVIEW_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$REVIEW_API_KEY" ]; then
+            echo '::error::Repository Secrets に OPENAI_API_KEY を追加してください。自動マージは実行しません。'
+            exit 1
+          fi
+      - name: レビュー用のコミットを取得（チェックアウト・実行はしない）
+        if: steps.plan.outputs.eligible == 'true'
+        env:
+          PR_NUMBER: ${{ fromJSON(steps.plan.outputs.plan).number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 認証をディスクに残さず、このfetchだけに渡す。
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags origin "+refs/pull/$PR_NUMBER/head:refs/remotes/origin/review-head"
+      - name: Codexで読み取り専用レビュー
+        id: codex
+        if: steps.plan.outputs.eligible == 'true'
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ':read-only'
+          safety-strategy: drop-sudo
+          prompt-file: review-input.md
+          output-schema-file: .github/automation/review.schema.json
+
+  publish-and-merge:
+    needs: review
+    if: needs.review.result == 'success' && needs.review.outputs.result != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+      checks: read
+      statuses: read
+    steps:
+      # 書き込み権限のあるジョブではPRのコードをチェックアウトしない。
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: 結果を投稿して条件を満たせばマージ
+        uses: actions/github-script@v8
+        env:
+          REVIEW_PLAN: ${{ needs.review.outputs.plan }}
+          REVIEW_RESULT: ${{ needs.review.outputs.result }}
+        with:
+          script: |
+            const automation = require(`${process.env.GITHUB_WORKSPACE}/.github/automation/review-merge.cjs`);
+            await automation.publish({ github, context, core,
+              original: JSON.parse(process.env.REVIEW_PLAN),
+              raw: process.env.REVIEW_RESULT });

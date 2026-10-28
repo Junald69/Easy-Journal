@@ -21,6 +21,8 @@ permissions:
   contents: read
 
 on:
+  # 自動マージ後もmainのCIを実行できるようにする。
+  workflow_dispatch:
   pull_request:
     branches:
       - main
@@ -52,6 +54,9 @@ jobs:
       # 2026-10-27 に GitHub の Releases を確認し、最新の安定版は v7.0.1（2026-07-20 公開）。
       - name: コードを取得
         uses: actions/checkout@v7.0.1
+
+      - name: 自動レビューの判定ルールをテスト
+        run: node .github/automation/review-merge.test.cjs
 
       # App Group ID（アプリ本体とウィジェットが共有するフォルダの名前）が、
       # Sources/Core/Storage/AppGroup.swift と project.yml で同じかを確認する。
@@ -384,3 +389,4 @@ jobs:
           path: screenshots/
           retention-days: 7
           if-no-files-found: warn
+
