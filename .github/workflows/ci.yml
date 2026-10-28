@@ -53,6 +53,35 @@ jobs:
       - name: コードを取得
         uses: actions/checkout@v7.0.1
 
+      # App Group ID（アプリ本体とウィジェットが共有するフォルダの名前）が、
+      # Sources/Core/Storage/AppGroup.swift と project.yml で同じかを確認する。
+      # 食い違ったら失敗にする。XcodeGen（プロジェクトを作る道具）より前に置く。
+      # Xcode は使わない。macOS の時間はほとんど使わない。
+      - name: App Group ID の一致を確認
+        run: |
+          set -e
+          set -o pipefail
+          swift_ids="$(grep -o 'group\.com\.[A-Za-z0-9.]*' Sources/Core/Storage/AppGroup.swift | sort -u || true)"
+          yml_ids="$(grep -o 'group\.com\.[A-Za-z0-9.]*' project.yml | sort -u || true)"
+          echo "AppGroup.swift:"
+          printf '%s\n' "${swift_ids}"
+          echo "project.yml:"
+          printf '%s\n' "${yml_ids}"
+          if [ -z "${swift_ids}" ] || [ -z "${yml_ids}" ]; then
+            echo "error: App Group ID を取り出せませんでした"
+            exit 1
+          fi
+          swift_count="$(printf '%s\n' "${swift_ids}" | grep -c . || true)"
+          yml_count="$(printf '%s\n' "${yml_ids}" | grep -c . || true)"
+          if [ "${swift_count}" -ne 1 ] || [ "${yml_count}" -ne 1 ]; then
+            echo "error: App Group ID が1つに定まりません"
+            exit 1
+          fi
+          if [ "${swift_ids}" != "${yml_ids}" ]; then
+            echo "error: App Group ID が一致しません（AppGroup.swift: ${swift_ids} / project.yml: ${yml_ids}）"
+            exit 1
+          fi
+
       # 要確認: sudo xcode-select -s で Xcode を選ぶ方法は、
       # GitHub の公式ドキュメント（docs.github.com）では確認できていない。
       # 選んだあと xcodebuild -version を表示し、26.6 でなければ失敗にする。

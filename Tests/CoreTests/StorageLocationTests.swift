@@ -6,7 +6,8 @@ import XCTest
 ///
 /// アプリ本体を `@testable import EasyJournal` している。
 /// `Sources/Core` をテスト側の sources には入れていない。
-/// この選び方が正しいかは、まだビルドしていないので未確認。
+/// 同じファイルを両方に入れると、型が二重になることがあるため。
+/// この分け方は T-006 から変えていない。
 final class StorageLocationTests: XCTestCase {
     func testInMemoryConfigurationIsStoredInMemoryOnly() {
         let configuration = StorageLocation.modelConfiguration(inMemory: true)

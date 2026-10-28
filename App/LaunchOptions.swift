@@ -9,10 +9,15 @@ struct LaunchOptions {
     /// `-openPage` の次に書かれた文字列。無ければ nil。
     let openPage: String?
 
+    /// `-inMemoryStore` が付いているとき true。
+    /// 画面テストが、App Group の保存先に触れないための印。メモリ上だけにする。
+    let inMemoryStore: Bool
+
     /// `ProcessInfo.processInfo.arguments` から読む。
     init(arguments: [String] = ProcessInfo.processInfo.arguments) {
         var sampleData = false
         var openPage: String?
+        var inMemoryStore = false
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
@@ -24,10 +29,13 @@ struct LaunchOptions {
                     openPage = arguments[valueIndex]
                     index = valueIndex
                 }
+            } else if argument == "-inMemoryStore" {
+                inMemoryStore = true
             }
             index += 1
         }
         self.sampleData = sampleData
         self.openPage = openPage
+        self.inMemoryStore = inMemoryStore
     }
 }

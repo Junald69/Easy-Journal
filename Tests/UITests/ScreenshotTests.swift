@@ -5,7 +5,8 @@ final class ScreenshotTests: XCTestCase {
     func testLaunchScreenshot() {
         let app = XCUIApplication()
         // 起動引数の受け取り口に渡すだけ。サンプルデータの中身は、まだ空（T-109）。
-        app.launchArguments = ["-sampleData"]
+        // -inMemoryStore は、保存先をメモリ上だけにする。CI の画面テストが App Group の保存先に触れないようにするため。
+        app.launchArguments = ["-sampleData", "-inMemoryStore"]
         app.launch()
 
         let title = app.staticTexts["Easy Journal"]

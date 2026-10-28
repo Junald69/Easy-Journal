@@ -2,6 +2,10 @@
 *.xcodeproj/
 App/Info.plist
 
+# XcodeGen が作る許可の宣言ファイル（生成物。手では書かない）
+# ファイル名を1つだけ書く。*.entitlements とは広く書かない。
+EasyJournal.entitlements
+
 # Xcodeがユーザーごとに作る設定フォルダ
 xcuserdata/
 
