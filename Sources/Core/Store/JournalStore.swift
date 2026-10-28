@@ -132,6 +132,16 @@ final class JournalStore {
         return try context.fetch(descriptor)
     }
 
+    /// 保存してあるモデルを、条件を付けずに全部返す。読むだけ。何も作らない・保存しない。
+    ///
+    /// `context`（読み書きの窓口）は private なので、別ファイルの月の読み出しからは取れない。
+    /// 月の画面は、1行と Daily を、それぞれ1回だけ取って、そのあと Swift で絞る。
+    /// 検索条件（`#Predicate`）は付けない。空を許す日付（String?）を検索条件に入れないため。
+    func storedModels<Model: PersistentModel>(_ modelType: Model.Type) throws -> [Model] {
+        _ = modelType
+        return try context.fetch(FetchDescriptor<Model>())
+    }
+
     /// その日の目次カード。複数あれば、中身があるものの中で一番古いもの。無ければ nil。
     private func preferredDailyPage(dateKey: String) throws -> Page? {
         let fetched = try fetchPages(kindRaw: PageKind.daily.rawValue)

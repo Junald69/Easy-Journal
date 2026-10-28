@@ -107,6 +107,11 @@ enum DesignTokens {
     static let accentRGB = resolvedRGB(fromHex: accentHex)
     static let accent = color(from: accentRGB)
 
+    /// 今日の行の帯。accent を薄くしたもの。新しい16進の色は作らない。仮。
+    /// 1 が accent そのまま、0 が透明。
+    static let todayBandOpacity = 0.35
+    static let todayBand = color(from: accentRGB, opacity: todayBandOpacity)
+
     /// 方眼の線の色（透明度を掛ける前）。仮の値 `#8A9A8C`。
     static let gridHex = "#8A9A8C"
     static let gridRGB = resolvedRGB(fromHex: gridHex)

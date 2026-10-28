@@ -1,10 +1,11 @@
+import Foundation
 import SwiftData
 import SwiftUI
 
 /// アプリの入口。
 ///
 /// 起動時に保存の入れ物（`ModelContainer`）を作る。
-/// 成功したときは、仮の画面で「Easy Journal」と、いま開いているページの文字を出す。
+/// 成功したときは、月の記録なら Monthly Log の画面、それ以外は仮の画面を出す。
 /// 失敗したときは、クラッシュさせず、エラーの画面を出す。
 /// データを消したり、別の場所に作り直したりはしない。
 ///
@@ -13,24 +14,29 @@ import SwiftUI
 /// 条件を満たすときだけ見本を入れる。入れ損ねても、クラッシュさせず、そのまま起動する。
 /// `-openPage` の文字列が読めたときは、そのページを最初のページにする。
 /// 無いか、読めないときは、いまの月の記録（Monthly Log）のまま。
-/// 本物の月ページなどは、次のチケット（T-111 以降）で作る。
+/// `-todayKey` は、Debug かつ `-inMemoryStore` のときだけ、「今日」を固定する。
 @main
 struct EasyJournalApp: App {
     /// 開けた保存の入れ物。失敗したときは nil。
     private let modelContainer: ModelContainer?
     /// 失敗したときの説明。成功したときは nil。
     private let storageErrorMessage: String?
+    /// 今日の日付キー。月の画面に渡す。起動のときに1回決める。
+    private let todayKey: String
     /// 今どのページを開いているか。成功の画面だけに渡す。
     @State private var router: Router
 
     init() {
         let options = LaunchOptions()
+        let calendar = DateKey.makeCalendar()
+        let now = Date()
         let launchRouter = LaunchPage.makeRouter(
             openPage: options.openPage,
-            now: Date(),
-            calendar: DateKey.makeCalendar()
+            now: now,
+            calendar: calendar
         )
         _router = State(initialValue: launchRouter)
+        todayKey = EasyJournalApp.resolvedTodayKey(options: options, now: now, calendar: calendar)
         do {
             let container = try StorageLocation.makeContainer(inMemory: options.inMemoryStore)
             modelContainer = container
@@ -59,7 +65,7 @@ struct EasyJournalApp: App {
     var body: some Scene {
         WindowGroup {
             if let modelContainer {
-                PlaceholderPageView(router: router)
+                RootPageView(router: router, todayKey: todayKey)
                     .modelContainer(modelContainer)
             } else {
                 VStack(spacing: 16) {
@@ -69,5 +75,25 @@ struct EasyJournalApp: App {
                 .padding()
             }
         }
+    }
+
+    /// 「今日」の日付キー。普段は、いまの時計と端末の暦。
+    ///
+    /// `-todayKey` を使うのは、Debug かつメモリ上の保存先のときだけ。
+    /// 値が日付キーとして読めないときは、普段の今日のまま。
+    /// Release（配布向けの組み立て）では、引数があっても使わない。
+    static func resolvedTodayKey(options: LaunchOptions, now: Date, calendar: Calendar) -> String {
+        let usual = DateKey.todayKey(now: now, calendar: calendar)
+        #if DEBUG
+        if options.inMemoryStore,
+           let requested = options.todayKey,
+           DateKey.isValidDayKey(requested) {
+            return requested
+        }
+        #else
+        // Release では -todayKey を使わない。引数は読んでも捨てる。
+        _ = options.todayKey
+        #endif
+        return usual
     }
 }
