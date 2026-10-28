@@ -15,7 +15,9 @@ enum DesignTokens {
     /// 16進の色（例: `#F7F4EC` または `F7F4EC`）を、赤・緑・青の数字にする。
     ///
     /// 受け付ける形は、6桁だけです。先頭の `#` はあってもなくてもよいです。大文字と小文字は同じです。
-    /// 長さが違う、空白がある、0-9 と A-F 以外の文字があるときは nil です。クラッシュしません。
+    /// 長さが違う、空白がある、ASCII の 0-9 と A-F 以外の文字があるときは nil です。
+    /// `+` や `-` で始まる文字も nil です。全角の数字も nil です。クラッシュしません。
+    /// 読めたときの赤・緑・青は、それぞれ 0〜255 です。
     /// `#RGB` のような短い書き方と、透明度つきの 8 桁は、使いません。
     static func rgb(fromHex text: String) -> RGB? {
         var digits = text
@@ -24,13 +26,28 @@ enum DesignTokens {
         }
         guard digits.count == 6 else { return nil }
 
-        let scalars = Array(digits.unicodeScalars)
+        // 先に、1文字ずつ ASCII の 0-9 / a-f / A-F だけかを見る。
+        // `Int(_:radix:)` は先頭の `+` と `-` も数字として読むので、使わない。
+        // `Character.isHexDigit` は全角数字を通すことがあるので、使わない。
+        var scalars: [Unicode.Scalar] = []
+        for character in digits {
+            let pieces = Array(character.unicodeScalars)
+            guard pieces.count == 1, let scalar = pieces.first, asciiHexValue(scalar) != nil else {
+                return nil
+            }
+            scalars.append(scalar)
+        }
         guard scalars.count == 6 else { return nil }
 
         func channel(at offset: Int) -> Int? {
             guard offset >= 0, offset + 1 < scalars.count else { return nil }
-            let pair = String(scalars[offset]) + String(scalars[offset + 1])
-            return Int(pair, radix: 16)
+            guard let high = asciiHexValue(scalars[offset]),
+                  let low = asciiHexValue(scalars[offset + 1]) else {
+                return nil
+            }
+            let number = high * 16 + low
+            guard number >= 0, number <= 255 else { return nil }
+            return number
         }
 
         guard let red = channel(at: 0),
@@ -39,6 +56,21 @@ enum DesignTokens {
             return nil
         }
         return RGB(red: red, green: green, blue: blue)
+    }
+
+    /// ASCII の 0-9 / a-f / A-F だけを、0〜15 にする。それ以外は nil。
+    private static func asciiHexValue(_ scalar: Unicode.Scalar) -> Int? {
+        let code = scalar.value
+        if code >= 0x30 && code <= 0x39 {
+            return Int(code - 0x30)
+        }
+        if code >= 0x41 && code <= 0x46 {
+            return Int(code - 0x41) + 10
+        }
+        if code >= 0x61 && code <= 0x66 {
+            return Int(code - 0x61) + 10
+        }
+        return nil
     }
 
     /// 16進が読めなかったときだけ使う色。真っ黒。今の色の文字列は読めるので、通常は使いません。

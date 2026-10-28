@@ -64,6 +64,12 @@ final class DesignTokensTests: XCTestCase {
             "F7F4EC\n",
             "##F7F4EC",
             "0xF7F4EC",
+            "+12345",
+            "-12345",
+            "#+12345",
+            "12+456",
+            "#-FFFFF",
+            "１２３４５６",
         ]
         for text in rejected {
             XCTAssertNil(DesignTokens.rgb(fromHex: text), text)
