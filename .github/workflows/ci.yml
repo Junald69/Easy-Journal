@@ -5,7 +5,11 @@
 # macOS は時間でお金がかかる。Free プランの無料枠は月 2,000 分。
 # macOS は 1 分あたり約 $0.062。ジョブは分単位で切り上げる（1 分 22 秒は 2 分と数える）。
 # 「macOS は 10 倍消費」という記載、および無料枠をどれだけ消費するか（倍率）は、公式では未確認。2,000 分がそのまま macOS の分数とは限らない。
-# PR への push と main への push の両方で動く。
+# PR ではビルド+全テスト+スクリーンショット（今までと同じ）、main への push ではビルドだけ。
+# テスト以降の手順は「pull_request のときだけ動かす」という許可リスト式にしている。
+# 将来 workflow_dispatch（手で起動）や schedule（定期実行）を足すときは、テストが黙って skipped（飛ばされる）になる。そのときに条件を見直す。
+# .md や docs だけの変更では動かない。
+# paths-ignore は、変更されたファイルがすべて無視対象のときだけ動かさない。ほかのファイルも一緒に変わっているときは動く。
 # GitHub の予算アラート（Budgets and alerts）を設定しておくと安心（Jun 向けのメモ）。
 #
 # 同じ名前のシミュレーターが複数あるときは、一覧の最初を選ぶ。ランナーイメージの更新で、選ばれるOSが変わることがある。
@@ -25,16 +29,22 @@ on:
     branches:
       - main
     # ドキュメントだけの変更では動かさない。
+    # paths-ignore は、変更されたファイルがすべて無視対象のときだけ動かさない。
     # ほかのファイルも一緒に変わっているときは動く。
     paths-ignore:
       - "docs/**"
       - "README.md"
+      - "**/*.md"
   push:
     branches:
       - main
+    # ドキュメントだけの変更では動かさない。
+    # paths-ignore は、変更されたファイルがすべて無視対象のときだけ動かさない。
+    # ほかのファイルも一緒に変わっているときは動く。
     paths-ignore:
       - "docs/**"
       - "README.md"
+      - "**/*.md"
 
 # PR のときだけ、同じブランチの古い実行を止める。
 # main への push では、実行中の実行は止めない（ただし、待っている実行は新しい実行に置き換わることがある）。
@@ -188,7 +198,9 @@ jobs:
       # 単体テストと UI テストを、この1回の xcodebuild test でまとめて実行する。
       # 結果は TestResults.xcresult（テスト結果のまとまり）に入る。
       # UI テストで増える時間は、ここでは測れない（要確認）。
+      # main への push では実行しない。PR のときだけテストする。
       - name: テスト
+        if: github.event_name == 'pull_request'
         run: |
           set -e
           set -o pipefail
@@ -206,8 +218,9 @@ jobs:
       # actions/upload-artifact の安定版。
       # 2026-10-27 に GitHub の Releases を確認し、最新の安定版は v7.0.2（2026-10-07 公開）。
       # 失敗したときだけアップロードする。テストより前で失敗したときは、ファイルが無いことがある。
+      # main への push ではテストしないので、この手順も動かさない。
       - name: 結果ファイルをアップロード
-        if: failure()
+        if: ${{ failure() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: xcresult
@@ -221,9 +234,10 @@ jobs:
       # 失敗しても、あとの手順は続ける。
       # テストが失敗したときも続ける（画面写真が残っていることがあるため）。
       # 既存の「結果ファイルをアップロード」の条件を変えないよう、その後に置いている。
+      # main への push ではテストしないので、この手順も動かさない。
       - name: スクリーンショットを取り出す
         id: export-screenshots
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         continue-on-error: true
         run: |
           set -e
@@ -277,8 +291,9 @@ jobs:
       # 要確認: simctl で起動して撮る手順は、ここでは試していない。動くかは未確認。
       # アプリのパスと Bundle ID は、ビルド結果と PlistBuddy から取る。べた書きしない。
       # この手順も未確認なので、失敗してもジョブ全体は止めない。PNG が無いことは、次のログに出す。
+      # main への push ではテストしないので、この手順も動かさない。png_count の判定はそのまま残す。
       - name: 予備のスクリーンショット
-        if: ${{ !cancelled() && (steps.export-screenshots.outputs.png_count == '0' || steps.export-screenshots.outputs.png_count == '') }}
+        if: ${{ !cancelled() && (steps.export-screenshots.outputs.png_count == '0' || steps.export-screenshots.outputs.png_count == '') && github.event_name == 'pull_request' }}
         continue-on-error: true
         run: |
           set -e
@@ -360,8 +375,9 @@ jobs:
           echo "=== 画面写真（予備） ==="
           xcrun simctl io booted screenshot screenshots/fallback-launch.png
 
+      # main への push ではテストしないので、この手順も動かさない。
       - name: スクリーンショットの有無をログに出す
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           set -e
           set -o pipefail
@@ -376,8 +392,9 @@ jobs:
 
       # actions/upload-artifact の安定版。上の結果ファイルと同じ v7.0.2。
       # テストの成否にかかわらずアップロードする。保存期間は7日。
+      # main への push ではテストしないので、この手順も動かさない。
       - name: スクリーンショットをアップロード
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: screenshots
