@@ -7,6 +7,9 @@ import SwiftData
 /// 月のページは、同じ monthKey で2つ作らない。作るときも findOrCreate を通す（T-105）。
 /// dateKey と monthKey は、中身の DailyPage / MonthlyPage と同時に同じ値を入れる（T-105で保証）。
 /// このチケットではユニーク制約（同じ値を禁止する印）は付けない。
+///
+/// 日を消す操作は、DailyPage ではなく、この Page を消す。Page から日の中身は cascade（一緒に消える）なので、日ページとタスクも消える。
+/// DailyPage だけを消すと、Page は空のカード（種類は daily、中身は nil）として残る。月も同じ。月を消すときも Page を消す。
 @Model
 final class Page {
     /// ページを見分ける ID。
@@ -28,12 +31,14 @@ final class Page {
     @Relationship
     var journal: Journal? = nil
 
-    /// 月の中身。このページを消すと、中身も消える。
+    /// 月の中身。このページを消すと、中身も消える（cascade）。
+    /// MonthlyPage だけを消すと、この Page は空のカードとして残る（反対側は nullify。つながりだけ外す）。
     /// 日のページでは空（nil）。
     @Relationship(deleteRule: .cascade, inverse: \MonthlyPage.page)
     var monthly: MonthlyPage? = nil
 
-    /// 日の中身。このページを消すと、中身も消える。
+    /// 日の中身。このページを消すと、中身も消える（cascade）。
+    /// DailyPage だけを消すと、この Page は空のカードとして残る（反対側は nullify。つながりだけ外す）。
     /// 月のページでは空（nil）。
     @Relationship(deleteRule: .cascade, inverse: \DailyPage.page)
     var daily: DailyPage? = nil

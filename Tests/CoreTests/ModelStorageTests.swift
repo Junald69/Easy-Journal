@@ -242,6 +242,90 @@ final class ModelStorageTests: XCTestCase {
         XCTAssertEqual(histories.first?.taskID, taskID)
     }
 
+    /// 日を消す操作は Page を消す。Page → daily は cascade なので、日ページとタスクも消える。
+    func testDeletingPageDeletesItsDailyPageAndTasks() throws {
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+
+        let page = Page(dateKey: "2026-10-27", monthKey: "2026-10")
+        let daily = DailyPage(dateKey: "2026-10-27", memo: "日の中身")
+        let task = JournalTask(title: "日のタスク")
+        context.insert(page)
+        context.insert(daily)
+        context.insert(task)
+        page.daily = daily
+        task.daily = daily
+        try context.save()
+
+        context.delete(page)
+        try context.save()
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyPage>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<JournalTask>()), 0)
+    }
+
+    /// 手帳を消すと、ページも消える（Journal → pages は cascade）。
+    func testDeletingJournalDeletesItsPage() throws {
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+
+        let journal = Journal(title: "消える手帳")
+        let page = Page(monthKey: "2026-10")
+        context.insert(journal)
+        context.insert(page)
+        page.journal = journal
+        try context.save()
+
+        context.delete(journal)
+        try context.save()
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Page>()), 0)
+    }
+
+    /// 月ページを消すと、1行・月のタスク・習慣の定義も消える（どれも cascade）。
+    func testDeletingMonthlyPageDeletesLogLineTaskAndHabit() throws {
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+
+        let monthly = MonthlyPage(monthKey: "2026-10")
+        let line = MonthlyLogLine(dateKey: "2026-10-27", text: "一行")
+        let task = JournalTask(title: "月のタスク")
+        let habit = Habit(name: "水", shortLabel: "水")
+        context.insert(monthly)
+        context.insert(line)
+        context.insert(task)
+        context.insert(habit)
+        line.monthly = monthly
+        task.monthly = monthly
+        habit.monthly = monthly
+        try context.save()
+
+        context.delete(monthly)
+        try context.save()
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<JournalTask>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Habit>()), 0)
+    }
+
+    /// 月を消す操作も Page を消す。Page → monthly は cascade なので、月ページも消える。
+    func testDeletingPageDeletesItsMonthlyPage() throws {
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+
+        let page = Page(monthKey: "2026-10", kindRaw: PageKind.monthly.rawValue)
+        let monthly = MonthlyPage(monthKey: "2026-10")
+        context.insert(page)
+        context.insert(monthly)
+        page.monthly = monthly
+        try context.save()
+
+        context.delete(page)
+        try context.save()
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyPage>()), 0)
+    }
+
     func testProgressRawRoundTripAndUnknownValueFallsBack() throws {
         let task = JournalTask(title: "途中")
         task.progress = .partial
