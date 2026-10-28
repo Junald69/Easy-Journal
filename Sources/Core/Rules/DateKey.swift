@@ -46,8 +46,8 @@ enum DateKey {
 
     /// 日付キーの日の始まりの瞬間。形式が不正、または存在しない日なら nil。
     /// 始まりの瞬間は、渡した暦の `startOfDay(for:)` で決める。
-    static func startOfDay(for dayKey: String, calendar: Calendar) -> Date? {
-        guard let parts = dayParts(dayKey) else { return nil }
+    static func startOfDay(for key: String, calendar: Calendar) -> Date? {
+        guard let parts = dayParts(key) else { return nil }
         var components = DateComponents()
         components.timeZone = calendar.timeZone
         components.year = parts.year
@@ -75,18 +75,18 @@ enum DateKey {
     }
 
     /// 次の日の日付キー。不正なキーなら nil。
-    static func nextDayKey(after dayKey: String) -> String? {
-        dayKey(byAdding: 1, to: dayKey)
+    static func nextDayKey(after key: String) -> String? {
+        shiftedDayKey(byAdding: 1, to: key)
     }
 
     /// 前の日の日付キー。不正なキーなら nil。
-    static func previousDayKey(before dayKey: String) -> String? {
-        dayKey(byAdding: -1, to: dayKey)
+    static func previousDayKey(before key: String) -> String? {
+        shiftedDayKey(byAdding: -1, to: key)
     }
 
     /// その月の日数。不正な月キーなら nil。
-    static func daysInMonth(monthKey: String) -> Int? {
-        guard let parts = monthParts(monthKey), let calendar = gregorianUTC() else { return nil }
+    static func daysInMonth(monthKey key: String) -> Int? {
+        guard let parts = monthParts(key), let calendar = gregorianUTC() else { return nil }
         guard let date = utcDate(year: parts.year, month: parts.month, day: 1, calendar: calendar) else {
             return nil
         }
@@ -95,8 +95,8 @@ enum DateKey {
     }
 
     /// その月の日付キーを、1日から順に返す。不正なら空配列。
-    static func dayKeys(inMonth monthKey: String) -> [String] {
-        guard let parts = monthParts(monthKey), let count = daysInMonth(monthKey: monthKey) else {
+    static func dayKeys(inMonth key: String) -> [String] {
+        guard let parts = monthParts(key), let count = daysInMonth(monthKey: key) else {
             return []
         }
         return (1...count).map { day in
@@ -105,14 +105,14 @@ enum DateKey {
     }
 
     /// 日付キーから月キーを取り出す。不正な日付キーなら nil。
-    static func monthKey(ofDayKey dayKey: String) -> String? {
-        guard let parts = dayParts(dayKey) else { return nil }
+    static func monthKey(ofDayKey key: String) -> String? {
+        guard let parts = dayParts(key) else { return nil }
         return monthString(year: parts.year, month: parts.month)
     }
 
     /// 日付キーの曜日。不正な日付キーなら nil。
-    static func weekday(ofDayKey dayKey: String) -> Weekday? {
-        guard let parts = dayParts(dayKey), let calendar = gregorianUTC() else { return nil }
+    static func weekday(ofDayKey key: String) -> Weekday? {
+        guard let parts = dayParts(key), let calendar = gregorianUTC() else { return nil }
         guard let date = utcDate(year: parts.year, month: parts.month, day: parts.day, calendar: calendar) else {
             return nil
         }
@@ -132,8 +132,8 @@ enum DateKey {
         return calendar
     }
 
-    private static func dayKey(byAdding days: Int, to dayKey: String) -> String? {
-        guard let parts = dayParts(dayKey), let calendar = gregorianUTC() else { return nil }
+    private static func shiftedDayKey(byAdding days: Int, to key: String) -> String? {
+        guard let parts = dayParts(key), let calendar = gregorianUTC() else { return nil }
         guard let date = utcDate(year: parts.year, month: parts.month, day: parts.day, calendar: calendar) else {
             return nil
         }
