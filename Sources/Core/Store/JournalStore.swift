@@ -4,9 +4,10 @@ import SwiftData
 /// ページを探す／作る保存係。
 ///
 /// 画面から直接 insert（保存場所へ追加）せず、ここを通す。
-/// 1日1枚、1か月1枚はここで守る。同じ日付がすでにあれば、新しくは作らない。
-/// 重複（同じ日・同じ月が2つ）は消さない。統合もしない。掃除はあとで別の作業。
-/// 失敗したときは、そのエラーをそのまま投げる。握りつぶさない。`fatalError` にもしない。
+/// 同じ端末の通常の使い方では、1日1枚、1か月1枚をここで守る。同じ日付がすでにあれば、新しくは作らない。
+/// 同期や別の処理で重複ができたときは、中身があるものを優先し、その中で一番古いものを使う。削除はしない。
+/// ModelContext（読み書きの窓口）を作ったスレッドから使う前提。
+/// 保存に失敗したときは、未保存の変更を取り消してから、そのエラーをそのまま投げる。握りつぶさない。`fatalError` にもしない。
 final class JournalStore {
     /// 記録の読み書きに使う場所。
     private let context: ModelContext
@@ -27,7 +28,7 @@ final class JournalStore {
         }
         let journal = Journal()
         context.insert(journal)
-        try context.save()
+        try saveOrRollback()
         return journal
     }
 
@@ -68,6 +69,7 @@ final class JournalStore {
     /// すでにあれば、何も作らず、それを返す。`createdBy`（誰が作ったか）は変えない。
     /// 無いときは、その月の月ページも用意し、日ページから月ページへの PageLink を1つ作る。
     /// 目次カードだけあって中身が無いときは、新しい Page は作らず、中身だけ足す。
+    /// その直しでは、月への PageLink と Journal（手帳）は戻さない。つながりが必ずあるとは限らない。
     func findOrCreateDaily(dateKey: String, createdBy: PageCreatedBy) throws -> DailyPage {
         guard DateKey.isValidDayKey(dateKey) else {
             throw JournalStoreError.invalidDayKey(dateKey)
@@ -108,22 +110,26 @@ final class JournalStore {
         return try context.fetch(descriptor)
     }
 
-    /// その日の目次カード。複数あれば一番古いもの。無ければ nil。
+    /// その日の目次カード。複数あれば、中身があるものの中で一番古いもの。無ければ nil。
     private func preferredDailyPage(dateKey: String) throws -> Page? {
         let fetched = try fetchPages(kindRaw: PageKind.daily.rawValue)
         let matches = fetched.filter { page in
             page.dateKey == dateKey
         }
-        return preferredPage(among: matches)
+        return preferredPage(among: matches) { candidate in
+            candidate.daily != nil
+        }
     }
 
-    /// その月の目次カード。複数あれば一番古いもの。無ければ nil。
+    /// その月の目次カード。複数あれば、中身があるものの中で一番古いもの。無ければ nil。
     private func preferredMonthlyPage(monthKey: String) throws -> Page? {
         let fetched = try fetchPages(kindRaw: PageKind.monthly.rawValue)
         let matches = fetched.filter { page in
             page.monthKey == monthKey
         }
-        return preferredPage(among: matches)
+        return preferredPage(among: matches) { candidate in
+            candidate.monthly != nil
+        }
     }
 
     /// 月の目次カードを、無ければ作って返す。中身が空なら足す。
@@ -153,7 +159,7 @@ final class JournalStore {
         context.insert(monthly)
         page.monthly = monthly
         page.journal = journal
-        try context.save()
+        try saveOrRollback()
         return page
     }
 
@@ -162,7 +168,7 @@ final class JournalStore {
         let monthly = MonthlyPage(monthKey: monthKey)
         context.insert(monthly)
         page.monthly = monthly
-        try context.save()
+        try saveOrRollback()
         return monthly
     }
 
@@ -191,18 +197,19 @@ final class JournalStore {
         context.insert(link)
         page.daily = daily
         page.journal = journal
-        try context.save()
+        try saveOrRollback()
         return daily
     }
 
     /// 空の日の目次カードに、中身だけ足す。新しい Page は作らない。
     ///
-    /// 月ページや PageLink は、ここでは足さない。目次カードがすでにあるときの直し方。
+    /// 壊れた日ページを直しても、月への PageLink と Journal（手帳）は戻さない。
+    /// 使う側は「つながりは必ずある」と仮定しない。
     private func attachDaily(to page: Page, dateKey: String) throws -> DailyPage {
         let daily = DailyPage(dateKey: dateKey)
         context.insert(daily)
         page.daily = daily
-        try context.save()
+        try saveOrRollback()
         return daily
     }
 
@@ -215,12 +222,28 @@ final class JournalStore {
         }
     }
 
-    /// 作った時刻が一番古い目次カード。同じ時刻なら id の文字順が小さい方。
+    /// 使う目次カードを選ぶ。消さない。統合しない。
     ///
-    /// 消さない。統合しない。
-    private func preferredPage(among pages: [Page]) -> Page? {
-        pages.min { lhs, rhs in
+    /// 中身があるものを優先し、その中で作った時刻が一番古いもの。
+    /// 中身があるものが無ければ、候補全体で一番古いもの。
+    /// 時刻が同じなら、id の文字順（`uuidString`）が小さい方。この順序は変えない。
+    private func preferredPage(among pages: [Page], hasContent: (Page) -> Bool) -> Page? {
+        let withContent = pages.filter(hasContent)
+        let candidates = withContent.isEmpty ? pages : withContent
+        return candidates.min { lhs, rhs in
             isBefore(lhs.createdAt, lhs.id, rhs.createdAt, rhs.id)
+        }
+    }
+
+    /// 保存する。失敗したときは変更を取り消してから、エラーを投げ直す。
+    ///
+    /// `rollback()` は context 全体に効く。呼び出し側の未保存の編集も消える。
+    private func saveOrRollback() throws {
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
         }
     }
 

@@ -441,6 +441,82 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertEqual(journals.count, 1)
     }
 
+    /// 最古の日ページは中身が無く、新しい重複には中身がある。新しい方を返す。
+    func testNewerDuplicateWithContentIsChosenWhenOldestDailyIsBroken() throws {
+        guard let newerID = UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
+              let olderID = UUID(uuidString: "00000000-0000-0000-0000-000000000002") else {
+            XCTFail("UUID の文字列を読めませんでした")
+            return
+        }
+        let (store, context, _) = try makeStore()
+        let dateKey = "2026-10-27"
+        // 中身がある新しい方を先に入れる。壊れた古い方は、時刻は古く、id の文字順は大きい。
+        let newerDaily = insertDailyPair(
+            in: context,
+            id: newerID,
+            dateKey: dateKey,
+            monthKey: "2026-10",
+            createdAt: Date(timeIntervalSince1970: 2_000),
+            memo: "中身あり"
+        )
+        let broken = Page(
+            id: olderID,
+            kindRaw: PageKind.daily.rawValue,
+            dateKey: dateKey,
+            monthKey: "2026-10",
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        context.insert(broken)
+        try context.save()
+
+        let found = try store.findDaily(dateKey: dateKey)
+        XCTAssertEqual(found?.id, newerDaily.id)
+        XCTAssertEqual(found?.memo, "中身あり")
+
+        let again = try store.findOrCreateDaily(dateKey: dateKey, createdBy: .user)
+        XCTAssertEqual(again.id, newerDaily.id)
+        XCTAssertEqual(again.memo, "中身あり")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<DailyPage>()), 1)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Page>()), 2)
+        XCTAssertNil(broken.daily)
+    }
+
+    /// 中身がある月が2つのとき、日の PageLink は、その中で一番古い月へ張る。
+    func testFindOrCreateDailyLinksToOldestMonthlyThatHasContent() throws {
+        guard let newerID = UUID(uuidString: "00000000-0000-0000-0000-000000000001"),
+              let olderID = UUID(uuidString: "00000000-0000-0000-0000-000000000002") else {
+            XCTFail("UUID の文字列を読めませんでした")
+            return
+        }
+        let (store, context, _) = try makeStore()
+        // 新しい方を先に入れる。古い方は id の文字順が大きい。どちらも中身がある。
+        let newerPage = insertMonthlyPair(
+            in: context,
+            id: newerID,
+            monthKey: "2026-10",
+            createdAt: Date(timeIntervalSince1970: 2_000)
+        )
+        let olderPage = insertMonthlyPair(
+            in: context,
+            id: olderID,
+            monthKey: "2026-10",
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        try context.save()
+
+        let daily = try store.findOrCreateDaily(dateKey: "2026-10-27", createdBy: .user)
+        let links = try context.fetch(FetchDescriptor<PageLink>())
+        XCTAssertEqual(links.count, 1)
+        XCTAssertEqual(links.first?.typeRaw, "dailyToMonthly")
+        XCTAssertEqual(links.first?.toPageID, olderPage.id)
+        XCTAssertEqual(links.first?.toPageID, olderID)
+        XCTAssertNotEqual(links.first?.toPageID, newerPage.id)
+        XCTAssertEqual(links.first?.fromPageID, daily.page?.id)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyPage>()), 2)
+        XCTAssertEqual(try countPages(kindRaw: PageKind.monthly.rawValue, in: context), 2)
+        XCTAssertEqual(try countPages(kindRaw: PageKind.daily.rawValue, in: context), 1)
+    }
+
     // MARK: - ヘルパー
 
     private func makeStore() throws -> (store: JournalStore, context: ModelContext, container: ModelContainer) {
@@ -493,5 +569,26 @@ final class JournalStoreTests: XCTestCase {
         context.insert(daily)
         page.daily = daily
         return daily
+    }
+
+    @discardableResult
+    private func insertMonthlyPair(
+        in context: ModelContext,
+        id: UUID = UUID(),
+        monthKey: String,
+        createdAt: Date
+    ) -> Page {
+        let page = Page(
+            id: id,
+            kindRaw: PageKind.monthly.rawValue,
+            dateKey: nil,
+            monthKey: monthKey,
+            createdAt: createdAt
+        )
+        let monthly = MonthlyPage(monthKey: monthKey)
+        context.insert(page)
+        context.insert(monthly)
+        page.monthly = monthly
+        return page
     }
 }
