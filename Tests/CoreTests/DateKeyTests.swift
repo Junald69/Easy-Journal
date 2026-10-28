@@ -239,6 +239,33 @@ final class DateKeyTests: XCTestCase {
         XCTAssertEqual(DateKey.dayKey(from: instant, calendar: calendar), "2026-10-27")
     }
 
+    func testDayKeyIgnoresNonGregorianCalendarIdentifier() throws {
+        let timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = timeZone
+        let gregorian = DateKey.makeCalendar(timeZone: timeZone)
+        let instant = try makeDate(
+            year: 2026,
+            month: 10,
+            day: 28,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            calendar: gregorian
+        )
+        XCTAssertEqual(DateKey.dayKey(from: instant, calendar: buddhist), "2026-10-28")
+        XCTAssertEqual(DateKey.monthKey(from: instant, calendar: buddhist), "2026-10")
+    }
+
+    func testStartOfDayIgnoresNonGregorianCalendarIdentifier() throws {
+        let timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = timeZone
+        let start = try XCTUnwrap(DateKey.startOfDay(for: "2026-10-28", calendar: buddhist))
+        let gregorian = DateKey.makeCalendar(timeZone: timeZone)
+        XCTAssertEqual(DateKey.dayKey(from: start, calendar: gregorian), "2026-10-28")
+    }
+
     func testStartOfDayRoundTripsToMidnightInTokyo() throws {
         let calendar = try makeCalendar(timeZoneIdentifier: "Asia/Tokyo")
         let start = try XCTUnwrap(DateKey.startOfDay(for: "2026-10-28", calendar: calendar))

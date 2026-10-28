@@ -28,13 +28,15 @@ enum DateKey {
 
     /// ある瞬間を、渡した暦のタイムゾーンで `yyyy-MM-dd` にする。
     static func dayKey(from date: Date, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        let gregorian = normalizedCalendar(calendar)
+        let parts = gregorian.dateComponents([.year, .month, .day], from: date)
         return dayString(year: parts.year ?? 0, month: parts.month ?? 0, day: parts.day ?? 0)
     }
 
     /// ある瞬間を、渡した暦のタイムゾーンで `yyyy-MM` にする。
     static func monthKey(from date: Date, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.year, .month], from: date)
+        let gregorian = normalizedCalendar(calendar)
+        let parts = gregorian.dateComponents([.year, .month], from: date)
         return monthString(year: parts.year ?? 0, month: parts.month ?? 0)
     }
 
@@ -47,21 +49,22 @@ enum DateKey {
     /// 日付キーの日の始まりの瞬間。形式が不正、または存在しない日なら nil。
     /// 始まりの瞬間は、渡した暦の `startOfDay(for:)` で決める。
     static func startOfDay(for key: String, calendar: Calendar) -> Date? {
+        let gregorian = normalizedCalendar(calendar)
         guard let parts = dayParts(key) else { return nil }
         var components = DateComponents()
-        components.timeZone = calendar.timeZone
+        components.timeZone = gregorian.timeZone
         components.year = parts.year
         components.month = parts.month
         components.day = parts.day
         components.hour = 0
         components.minute = 0
         components.second = 0
-        guard let date = calendar.date(from: components) else { return nil }
-        let back = calendar.dateComponents([.year, .month, .day], from: date)
+        guard let date = gregorian.date(from: components) else { return nil }
+        let back = gregorian.dateComponents([.year, .month, .day], from: date)
         guard back.year == parts.year, back.month == parts.month, back.day == parts.day else {
             return nil
         }
-        return calendar.startOfDay(for: date)
+        return gregorian.startOfDay(for: date)
     }
 
     /// `yyyy-MM-dd` だけを許す。ゼロ埋めなし、空白、存在しない日は不可。
@@ -117,6 +120,13 @@ enum DateKey {
             return nil
         }
         return Weekday(rawValue: calendar.component(.weekday, from: date))
+    }
+
+    /// 渡された暦が仏暦などでも、グレゴリオ暦に直す。タイムゾーンだけ引き継ぐ。
+    private static func normalizedCalendar(_ calendar: Calendar) -> Calendar {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        return gregorian
     }
 
     // MARK: - キー同士の計算（タイムゾーンに依存させない）
