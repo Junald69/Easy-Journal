@@ -58,6 +58,24 @@ targets:
       # この設定だけで足りるかは、まだビルドしていないので要確認。
       GENERATE_INFOPLIST_FILE: YES
 
+  # UIテスト（アプリを起動して画面を確認するテスト）。スクリーンショット用。
+  EasyJournalUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/UITests
+    dependencies:
+      # 起動する相手はアプリ本体。
+      # XcodeGen が、UIテストからこのアプリを起動する設定まで入れるかは要確認。
+      - target: EasyJournal
+    settings:
+      # 指定どおりの Bundle ID。
+      # bundleIdPrefix だけだと com.junald69.EasyJournalUITests になるので、完全な値を書く。
+      PRODUCT_BUNDLE_IDENTIFIER: com.junald69.easyjournal.uitests
+      # テスト用の Info.plist をファイルで置かない。Xcode にビルドのとき作らせる。
+      # この設定だけで足りるかは、まだビルドしていないので要確認。
+      GENERATE_INFOPLIST_FILE: YES
+
 # 共有スキーム（xcodebuild -scheme で使う実行設定）。
 # shared: true を明示している。共有されるかは、生成後のファイルで確認する（要確認）。
 schemes:
@@ -66,8 +84,11 @@ schemes:
       targets:
         EasyJournal: all
         EasyJournalTests: [test]
+        EasyJournalUITests: [test]
     test:
+      # xcodebuild test は1回のまま。UIテストもこのスキームに含める。
       targets:
         - EasyJournalTests
+        - EasyJournalUITests
     management:
       shared: true

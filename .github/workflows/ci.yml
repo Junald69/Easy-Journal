@@ -5,10 +5,12 @@
 # macOS は時間でお金がかかる。Free プランの無料枠は月 2,000 分。
 # macOS は 1 分あたり約 $0.062。ジョブは分単位で切り上げる（1 分 22 秒は 2 分と数える）。
 # 「macOS は 10 倍消費」という記載は公式では未確認。
+# macOS が無料枠をどれだけ消費するか（倍率）は、公式では未確認。2,000 分がそのまま macOS の分数とは限らない。
 # PR への push と main への push の両方で動く。
 # GitHub の予算アラート（Budgets and alerts）を設定しておくと安心（Jun 向けのメモ）。
 #
-# シミュレーターの選び方は非決定的。iPhone 17 は iOS 26.2 / 26.4 / 26.5 など複数あり、一覧の最初のものを使う。
+# 同じ名前のシミュレーターが複数あるときは、一覧の最初を選ぶ。ランナーイメージの更新で、選ばれるOSが変わることがある。
+# iPhone 17 は iOS 26.2 / 26.4 / 26.5 など複数ある。
 # OS を固定したい場合は、あとで OS= を指定する（今は固定しない）。
 name: CI
 
@@ -35,7 +37,8 @@ on:
       - "docs/**"
       - "README.md"
 
-# PR のときだけ、同じブランチの古い実行を止める。main への push は履歴に残す。
+# PR のときだけ、同じブランチの古い実行を止める。
+# main への push では、実行中の実行は止めない（ただし、待っている実行は新しい実行に置き換わることがある）。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -154,6 +157,9 @@ jobs:
             -destination "${DESTINATION}" \
             -derivedDataPath DerivedData
 
+      # 単体テストと UI テストを、この1回の xcodebuild test でまとめて実行する。
+      # 結果は TestResults.xcresult（テスト結果のまとまり）に入る。
+      # UI テストで増える時間は、ここでは測れない（要確認）。
       - name: テスト
         run: |
           set -e
@@ -179,3 +185,169 @@ jobs:
           name: xcresult
           path: TestResults.xcresult
           retention-days: 7
+
+      # テストの添付（画面写真）を .xcresult から取り出す。
+      # 要確認: xcresulttool export attachments の引数は、公式では未確認。
+      # サードパーティの説明でしか見たことがない。ヘルプをログに出す。
+      # 失敗しても、あとの手順は続ける。
+      # テストが失敗したときも続ける（画面写真が残っていることがあるため）。
+      # 既存の「結果ファイルをアップロード」の条件を変えないよう、その後に置いている。
+      - name: スクリーンショットを取り出す
+        id: export-screenshots
+        if: always()
+        continue-on-error: true
+        run: |
+          set -e
+          set -o pipefail
+          mkdir -p screenshots
+
+          write_png_count() {
+            # 終了時の処理の最後が成功すると、失敗した終了コードが消えることがある。元のコードを残す。
+            status=$?
+            png_count="$(find screenshots -type f -iname '*.png' 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
+            if [ -z "${png_count}" ]; then
+              png_count="0"
+            fi
+            echo "取り出し直後の PNG の枚数: ${png_count}"
+            if [ -n "${GITHUB_OUTPUT}" ]; then
+              echo "png_count=${png_count}" >> "${GITHUB_OUTPUT}"
+            fi
+            exit "${status}"
+          }
+          trap write_png_count EXIT
+
+          echo "=== xcrun xcresulttool export attachments --help ==="
+          echo "要確認: 下は、このコマンド自身が出すヘルプです。引数が合っているかは未確認です。"
+          xcrun xcresulttool export attachments --help || true
+
+          result_path="${GITHUB_WORKSPACE}/TestResults.xcresult"
+          output_path="${GITHUB_WORKSPACE}/screenshots"
+          if [ ! -d "${result_path}" ]; then
+            echo "TestResults.xcresult がありません。取り出しはできません。"
+            exit 1
+          fi
+
+          echo "=== export attachments を試す ==="
+          echo "要確認: --path と --output-path は未確認です。ヘルプと違う場合、このコマンドは失敗します。"
+          echo "manifest.json の形は未確認なので、ファイル名の付け替えはしません。出てきたファイルをそのまま保存します。"
+          xcrun xcresulttool export attachments \
+            --path "${result_path}" \
+            --output-path "${output_path}"
+
+          echo "=== screenshots の中身 ==="
+          find screenshots -print
+
+          echo "=== 参考: ワークスペース内の PNG と manifest.json（DerivedData は除く） ==="
+          find . -path ./DerivedData -prune -o \( -iname '*.png' -o -name 'manifest.json' \) -print || true
+
+      # 予備。screenshots に PNG が1枚も無いときだけ動く。
+      # 要確認: simctl で起動して撮る手順は、ここでは試していない。動くかは未確認。
+      # アプリのパスと Bundle ID は、ビルド結果と PlistBuddy から取る。べた書きしない。
+      # この手順も未確認なので、失敗してもジョブ全体は止めない。PNG が無いことは、次のログに出す。
+      - name: 予備のスクリーンショット
+        if: ${{ always() && (steps.export-screenshots.outputs.png_count == '0' || steps.export-screenshots.outputs.png_count == '') }}
+        continue-on-error: true
+        run: |
+          set -e
+          set -o pipefail
+          mkdir -p screenshots
+
+          if [ -z "${SIMULATOR_UDID}" ]; then
+            echo "error: SIMULATOR_UDID が空です。予備の撮影はできません。"
+            exit 1
+          fi
+
+          echo "=== ビルド結果からアプリを探す ==="
+          if [ ! -d DerivedData ]; then
+            echo "error: DerivedData がありません。アプリのパスを取り出せません。"
+            exit 1
+          fi
+          app_path=""
+          app_count=0
+          while IFS= read -r app; do
+            if [ -z "${app}" ]; then
+              continue
+            fi
+            case "${app}" in
+              *UITest*|*uitest*)
+                echo "除外: ${app}"
+                continue
+                ;;
+            esac
+            case "${app}" in
+              *"/Build/Products/"*iphonesimulator*)
+                ;;
+              *)
+                echo "除外（ビルド成果物のシミュレーター向けではない）: ${app}"
+                continue
+                ;;
+            esac
+            echo "候補: ${app}"
+            app_count=$((app_count + 1))
+            app_path="${app}"
+          done < <(find DerivedData -type d -name '*.app' | sort)
+
+          if [ "${app_count}" -ne 1 ]; then
+            echo "error: アプリの .app を1つに決められませんでした（${app_count} 件）。パスはべた書きしません。"
+            exit 1
+          fi
+
+          echo "使うアプリ: ${app_path}"
+          bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app_path}/Info.plist")"
+          if [ -z "${bundle_id}" ]; then
+            echo "error: Bundle ID を取り出せませんでした。"
+            exit 1
+          fi
+          echo "Bundle ID（ビルド結果から）: ${bundle_id}"
+
+          echo "=== シミュレーターを起動 ==="
+          device_line="$(xcrun simctl list devices | grep "${SIMULATOR_UDID}" | head -n 1 || true)"
+          echo "シミュレーターの行: ${device_line}"
+          case "${device_line}" in
+            *"(Booted)"*)
+              echo "すでに起動済みです。"
+              ;;
+            *)
+              xcrun simctl boot "${SIMULATOR_UDID}"
+              ;;
+          esac
+          # 起動完了まで待つ。このコマンドの使い方は未確認（要確認）。
+          xcrun simctl bootstatus "${SIMULATOR_UDID}" -b
+
+          echo "=== アプリをインストール ==="
+          xcrun simctl install "${SIMULATOR_UDID}" "${app_path}"
+
+          echo "=== アプリを起動 ==="
+          # -sampleData は UI テストと同じ起動引数。中身はまだ空。
+          xcrun simctl launch "${SIMULATOR_UDID}" "${bundle_id}" -sampleData
+
+          echo "=== 数秒待つ ==="
+          sleep 5
+
+          echo "=== 画面写真（予備） ==="
+          xcrun simctl io booted screenshot screenshots/fallback-launch.png
+
+      - name: スクリーンショットの有無をログに出す
+        if: always()
+        run: |
+          set -e
+          set -o pipefail
+          mkdir -p screenshots
+          echo "=== screenshots の中身 ==="
+          find screenshots -print
+          png_count="$(find screenshots -type f -iname '*.png' | wc -l | tr -d '[:space:]')"
+          echo "PNG の枚数: ${png_count}"
+          if [ -z "${png_count}" ] || [ "${png_count}" = "0" ]; then
+            echo "PNGが無い"
+          fi
+
+      # actions/upload-artifact の安定版。上の結果ファイルと同じ v7.0.2。
+      # テストの成否にかかわらずアップロードする。保存期間は7日。
+      - name: スクリーンショットをアップロード
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: screenshots
+          path: screenshots/
+          retention-days: 7
+          if-no-files-found: warn
