@@ -15,8 +15,11 @@ targets:
     platform: iOS
     sources:
       - App
+      # 保存先などのコード。フォルダが無いと XcodeGen は失敗する。
+      - Sources
     settings:
-      # 決定済みの Bundle ID。仮ではない。
+      # 決定済みの Bundle ID。仮ではない。値は変えない。
+      # Junさんが確定した値。Apple側に登録できるかは、T-005のあとに確認する。
       # PRODUCT_BUNDLE_IDENTIFIER を書くと、このターゲットでは上の bundleIdPrefix の自動生成は使われない。
       PRODUCT_BUNDLE_IDENTIFIER: com.junald69.easyjournal
       # Swift の言語モード。仮（U-02）。5.0 系。
@@ -41,11 +44,25 @@ targets:
         # SwiftUI の画面切り替え（シーン）に必要な最小の設定。
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+    # アプリに許可する機能の宣言。XcodeGen が path のファイルを作る。手では書かない。
+    # 作られたファイルは Git に入れない。中身の元は、下の properties。
+    # App Group ID は Sources/Core/Storage/AppGroup.swift と同じにする。どちらかを変えたら、両方変える。
+    # Junさんが確定した値。Apple側に登録できるかは、T-005のあとに確認する。
+    entitlements:
+      path: EasyJournal.entitlements
+      properties:
+        # 値は必ずリスト（- で始まる行）。文字列1つにしない。
+        com.apple.security.application-groups:
+          - group.com.junald69.easyjournal
 
   EasyJournalTests:
     type: bundle.unit-test
     platform: iOS
     sources:
+      # Sources/Core はここには入れない。
+      # テストはアプリ本体を @testable import EasyJournal して使う。
+      # 同じファイルをアプリとテストの両方に入れると、型が二重になることがあるため。
+      # この選び方が正しいかは、まだビルドしていないので未確認。
       - Tests/CoreTests
     dependencies:
       # テストの相手はアプリ本体。XcodeGen は、相手がアプリのとき TEST_HOST（テストをアプリの中で動かす設定）を自動で入れる。
