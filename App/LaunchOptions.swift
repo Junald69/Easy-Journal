@@ -2,7 +2,7 @@ import Foundation
 
 /// 起動時に渡された引数を読む小さな型。
 /// 読むだけ。見本を入れる処理は `SampleData`。ここには置かない。
-/// `-openPage` の文字列で画面を開く処理は、まだ入れない（T-110）。
+/// `-openPage` は、うしろの文字列をここに入れるだけ。最初のページにする処理は `LaunchPage`。
 struct LaunchOptions {
     /// `-sampleData` が付いているとき true。
     let sampleData: Bool
