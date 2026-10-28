@@ -313,7 +313,7 @@ final class ModelStorageTests: XCTestCase {
         let container = try StorageLocation.makeContainer(inMemory: true)
         let context = ModelContext(container)
 
-        let page = Page(monthKey: "2026-10", kindRaw: PageKind.monthly.rawValue)
+        let page = Page(kindRaw: PageKind.monthly.rawValue, monthKey: "2026-10")
         let monthly = MonthlyPage(monthKey: "2026-10")
         context.insert(page)
         context.insert(monthly)
