@@ -62,7 +62,7 @@ targets:
       # Sources/Core はここには入れない。
       # テストはアプリ本体を @testable import EasyJournal して使う。
       # 同じファイルをアプリとテストの両方に入れると、型が二重になることがあるため。
-      # この選び方が正しいかは、まだビルドしていないので未確認。
+      # この分け方は T-006 から変えていない。設定の値は変えない。
       - Tests/CoreTests
     dependencies:
       # テストの相手はアプリ本体。XcodeGen は、相手がアプリのとき TEST_HOST（テストをアプリの中で動かす設定）を自動で入れる。
@@ -72,7 +72,7 @@ targets:
       # bundleIdPrefix だけだと com.junald69.EasyJournalTests になるので、完全な値を書く。
       PRODUCT_BUNDLE_IDENTIFIER: com.junald69.easyjournal.tests
       # テスト用の Info.plist をファイルで置かない。Xcode にビルドのとき作らせる。
-      # この設定だけで足りるかは、まだビルドしていないので要確認。
+      # この設定は T-003 から main に入っている。値は変えない。
       GENERATE_INFOPLIST_FILE: YES
 
   # UIテスト（アプリを起動して画面を確認するテスト）。スクリーンショット用。
@@ -90,7 +90,7 @@ targets:
       # bundleIdPrefix だけだと com.junald69.EasyJournalUITests になるので、完全な値を書く。
       PRODUCT_BUNDLE_IDENTIFIER: com.junald69.easyjournal.uitests
       # テスト用の Info.plist をファイルで置かない。Xcode にビルドのとき作らせる。
-      # この設定だけで足りるかは、まだビルドしていないので要確認。
+      # この設定は T-003 から main に入っている。値は変えない。
       GENERATE_INFOPLIST_FILE: YES
 
 # 共有スキーム（xcodebuild -scheme で使う実行設定）。
