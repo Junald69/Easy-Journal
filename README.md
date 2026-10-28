@@ -224,6 +224,24 @@ V1 を入れ子の enum（中にクラスを置く形）に固め、V2 を足し
 - 見本の月はいつも 2026年10月です。いまの日付には左右されません。その月の月ページがすでにあれば、2回目は何も足しません。
 - `-openPage` は、うしろの文字列を読むだけです。その画面を開く処理は、次のチケット（T-110）です。
 
+## ページの指定と URL
+
+どのページを開くかは、次の文字列で表します。将来、起動引数 `-openPage` の次にこの文字列を書きます。画面は、この変更では作りません。
+
+- 月の記録（Monthly Log）: `monthly:2026-10`
+- 月の習慣表（Monthly Tracker）: `tracker:2026-10`
+- その日のページ（Daily）: `daily:2026-10-27`
+
+URL（ディープリンク。特定のページを直接開くための住所）は、次のとおりです。`easyjournal://` で始まる住所を、このアプリが受け取れるように登録する作業は、まだしません。
+
+- `easyjournal://daily/today` … 今日の Daily
+- `easyjournal://daily/2026-10-27` … 指定した日の Daily
+- `easyjournal://monthly/today` … 今月の Monthly Log
+- `easyjournal://monthly/2026-10` … 指定した月の Monthly Log
+- `easyjournal://tracker/2026-10` … 指定した月の Monthly Tracker
+
+`today` は、そのときに渡した「いま」の日付です。小文字だけを正しいとみなします。
+
 ## これから追加される項目
 
 - ビルド方法（上の「ビルド方法」に書きました）
