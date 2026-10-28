@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// ページを探す／作る保存係。日ごとの記録と、タスクの追加・変更・削除もここを通す。
+/// ページを探す／作る保存係。日ごとの記録、タスクの追加・変更・削除、繰越もここを通す。
 ///
 /// 画面から直接 insert（保存場所へ追加）せず、ここを通す。
 /// 同じ端末の通常の使い方では、1日1枚、1か月1枚をここで守る。同じ日付がすでにあれば、新しくは作らない。
@@ -278,7 +278,7 @@ final class JournalStore {
     }
 }
 
-/// ページを探す／作るとき、記録を書くとき、タスクを変えるときのエラー。
+/// ページを探す／作るとき、記録を書くとき、タスクを変えるとき、繰越するときのエラー。
 ///
 /// 保存の失敗は、SwiftData が出したエラーをそのまま投げる。この enum には入れない。
 enum JournalStoreError: Error, Equatable {
@@ -298,6 +298,10 @@ enum JournalStoreError: Error, Equatable {
     case emptyTitle
     /// その ID のタスクが無い。
     case taskNotFound(UUID)
+    /// 繰越できない。日のタスクではない、完了、またはすでに繰越済み。
+    case cannotCarryForward(UUID)
+    /// 繰越済みではないので、取り消しできない。
+    case notCarriedForward(UUID)
 }
 
 // MARK: - 日ごとの記録
@@ -694,6 +698,180 @@ extension JournalStore {
     }
 }
 
+// MARK: - 繰越
+
+extension JournalStore {
+    /// 翌日の Daily（その日のページ）へコピーを作り、そのコピーを返す。
+    ///
+    /// 繰越できるのは、日のタスクで、未完（open）か一部（partial）で、まだ繰越していないときだけ。
+    /// 月のタスク、結び付く日が無い、完了、すでに繰越済み、のときは `cannotCarryForward`。何も変えない。
+    /// 元の日付から翌日が計算できないとき、日ページに目次カード（Page）が無いときも、同じエラー。何も作らない。
+    /// 翌日のページが無ければ作る。誰が作ったかは carryOver（繰越で作った）。あれば、そのまま使い、末尾に足す。
+    /// 元の進み具合は変えない。元は繰越済みにし、コピーの ID を入れる。
+    /// ページのつながり（PageLink）は、元の日の目次カードから翌日の日の目次カードへ。種類は carryOver。
+    /// 日ページ自体の ID ではない。日→月のつながりと同じ。同じ組み合わせがあれば足さない。
+    /// 翌日のページを用意する保存だけは、先に `findOrCreateDaily` の中で行われる。
+    /// コピー、元の更新、つながり、履歴は、最後の1回で保存する。
+    func carryForward(taskID: UUID) throws -> JournalTask {
+        guard let source = try storedTask(matchingID: taskID) else {
+            throw JournalStoreError.taskNotFound(taskID)
+        }
+        // 繰越できないときは、ここで戻る。翌日のページは作らない。
+        guard let sourceDaily = source.daily, source.scope == .daily else {
+            throw JournalStoreError.cannotCarryForward(taskID)
+        }
+        if TaskRules.canCarryForward(
+            progress: source.progress,
+            isCarriedForward: source.isCarriedForward
+        ) == false {
+            throw JournalStoreError.cannotCarryForward(taskID)
+        }
+        let sourceDayKey = sourceDaily.dateKey
+        guard let followingDayKey = DateKey.nextDayKey(after: sourceDayKey) else {
+            throw JournalStoreError.cannotCarryForward(taskID)
+        }
+        guard let originPageID = sourceDaily.page?.id else {
+            throw JournalStoreError.cannotCarryForward(taskID)
+        }
+        let sourceID = source.id
+        let sourceTitle = source.title
+        let sourceProgress = source.progress
+
+        let destinationDaily = try findOrCreateDaily(
+            dateKey: followingDayKey,
+            createdBy: .carryOver
+        )
+        guard let destinationPageID = destinationDaily.page?.id else {
+            throw JournalStoreError.cannotCarryForward(taskID)
+        }
+        let existingTasks = try tasks(onDaily: destinationDaily)
+        let order = nextSortOrder(among: existingTasks)
+        let linkAlreadyExists = try containsCarryOverLink(
+            from: originPageID,
+            to: destinationPageID
+        )
+
+        // ここから先は、保存の直前まで失敗しない。
+        let instant = currentDate()
+        let copy = JournalTask(
+            title: sourceTitle,
+            scopeRaw: TaskScope.daily.rawValue,
+            progressRaw: sourceProgress.rawValue,
+            isCarriedForward: false,
+            carriedFromTaskID: sourceID,
+            carriedToTaskID: nil,
+            sortOrder: order,
+            createdAt: instant,
+            completedAt: nil
+        )
+        context.insert(copy)
+        copy.daily = destinationDaily
+        source.isCarriedForward = true
+        source.carriedToTaskID = copy.id
+        if linkAlreadyExists == false {
+            let link = PageLink(
+                fromPageID: originPageID,
+                toPageID: destinationPageID,
+                typeRaw: PageLinkType.carryOver.rawValue
+            )
+            context.insert(link)
+        }
+        appendHistory(
+            taskID: sourceID,
+            action: .carriedForward,
+            fromProgress: sourceProgress,
+            toProgress: sourceProgress,
+            relatedTaskID: copy.id,
+            relatedDateKey: followingDayKey,
+            at: instant
+        )
+        appendHistory(
+            taskID: copy.id,
+            action: .created,
+            fromProgress: nil,
+            toProgress: sourceProgress,
+            relatedTaskID: sourceID,
+            relatedDateKey: sourceDayKey,
+            at: instant
+        )
+        try saveOrRollback()
+        return copy
+    }
+
+    /// 繰越を取り消す。元は繰越前の □ か ◧ に戻る。進み具合は変えない。
+    ///
+    /// 繰越済みでないときは `notCarriedForward`。タスクが無いときは `taskNotFound`。
+    /// コピーの履歴が「作った」1件だけなら、コピーを消す。「消した」履歴を1件足す。
+    /// コピーが変更済みなら、コピーは残し、`carriedFromTaskID` だけ空にする。
+    /// コピーが見つからないときは、コピーには触らない。
+    /// コピーの ID が元タスク自身のときは、消さない。
+    /// ページのつながり（PageLink）は消さない。変更は最後の1回で保存する。
+    func cancelCarryForward(taskID: UUID) throws {
+        guard let source = try storedTask(matchingID: taskID) else {
+            throw JournalStoreError.taskNotFound(taskID)
+        }
+        if source.isCarriedForward == false {
+            throw JournalStoreError.notCarriedForward(taskID)
+        }
+        // 先に、コピーと履歴を探す。このあいだは、まだ何も変えない。
+        let sourceID = source.id
+        let sourceProgress = source.progress
+        let carriedToID = source.carriedToTaskID
+        let foundCopy = try carriedToID.flatMap { candidateID in
+            try storedTask(matchingID: candidateID)
+        }
+        let linkedCopy: JournalTask?
+        if let foundCopy, foundCopy.id != sourceID {
+            linkedCopy = foundCopy
+        } else {
+            linkedCopy = nil
+        }
+        let relatedID = linkedCopy?.id ?? carriedToID
+        let relatedDayKey: String?
+        let copyProgress: TaskProgress?
+        let copyIsUnmodified: Bool
+        if let linkedCopy {
+            relatedDayKey = linkedCopy.daily?.dateKey
+            copyProgress = linkedCopy.progress
+            let copyHistories = try storedHistories(matchingTaskID: linkedCopy.id)
+            copyIsUnmodified = isUnmodifiedCarryCopy(copyHistories)
+        } else {
+            relatedDayKey = nil
+            copyProgress = nil
+            copyIsUnmodified = false
+        }
+
+        // ここから先は、保存の直前まで失敗しない。
+        let instant = currentDate()
+        if let linkedCopy {
+            if copyIsUnmodified {
+                appendHistory(
+                    taskID: linkedCopy.id,
+                    action: .deleted,
+                    fromProgress: copyProgress,
+                    toProgress: nil,
+                    at: instant
+                )
+                context.delete(linkedCopy)
+            } else {
+                linkedCopy.carriedFromTaskID = nil
+            }
+        }
+        source.isCarriedForward = false
+        source.carriedToTaskID = nil
+        appendHistory(
+            taskID: sourceID,
+            action: .carryCancelled,
+            fromProgress: sourceProgress,
+            toProgress: sourceProgress,
+            relatedTaskID: relatedID,
+            relatedDateKey: relatedDayKey,
+            at: instant
+        )
+        try saveOrRollback()
+    }
+}
+
 // MARK: - 記録とタスクの内部
 
 extension JournalStore {
@@ -849,12 +1027,16 @@ extension JournalStore {
         return highest + 1
     }
 
-    /// 履歴を1件足す。書き換えはしない。繰越の相手と日付は、今回は空。
+    /// 履歴を1件足す。書き換えはしない。
+    ///
+    /// 繰越の相手と日付は、渡したときだけ入る。省略したときは空。
     private func appendHistory(
         taskID: UUID,
         action: TaskHistoryAction,
         fromProgress: TaskProgress?,
         toProgress: TaskProgress?,
+        relatedTaskID: UUID? = nil,
+        relatedDateKey: String? = nil,
         at instant: Date
     ) {
         let history = TaskHistory(
@@ -862,10 +1044,41 @@ extension JournalStore {
             actionRaw: action.rawValue,
             fromProgressRaw: fromProgress?.rawValue,
             toProgressRaw: toProgress?.rawValue,
-            relatedTaskID: nil,
-            relatedDateKey: nil,
+            relatedTaskID: relatedTaskID,
+            relatedDateKey: relatedDateKey,
             at: instant
         )
         context.insert(history)
+    }
+
+    /// そのタスクの履歴。検索条件（`#Predicate`）は使わず、全部取ってから ID で絞る。
+    private func storedHistories(matchingTaskID taskID: UUID) throws -> [TaskHistory] {
+        let stored = try context.fetch(FetchDescriptor<TaskHistory>())
+        return stored.filter { item in
+            item.taskID == taskID
+        }
+    }
+
+    /// 繰越のつながりが、同じ元・同じ先・種類 carryOver で既にあるか。
+    ///
+    /// 目次カード（Page）の ID で比べる。種類が違うつながりは、別のものとして数える。
+    private func containsCarryOverLink(from originPageID: UUID, to destinationPageID: UUID) throws -> Bool {
+        let stored = try context.fetch(FetchDescriptor<PageLink>())
+        return stored.contains { link in
+            link.fromPageID == originPageID
+                && link.toPageID == destinationPageID
+                && link.typeRaw == PageLinkType.carryOver.rawValue
+        }
+    }
+
+    /// コピーが未変更か。履歴が「作った」1件だけのときだけ true。
+    private func isUnmodifiedCarryCopy(_ items: [TaskHistory]) -> Bool {
+        guard items.count == 1 else {
+            return false
+        }
+        guard let only = items.first else {
+            return false
+        }
+        return only.actionRaw == TaskHistoryAction.created.rawValue
     }
 }
