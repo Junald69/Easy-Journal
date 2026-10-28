@@ -801,10 +801,10 @@ extension JournalStore {
     /// 繰越を取り消す。元は繰越前の □ か ◧ に戻る。進み具合は変えない。
     ///
     /// 繰越済みでないときは `notCarriedForward`。タスクが無いときは `taskNotFound`。
-    /// コピーの履歴が「作った」1件だけなら、コピーを消す。「消した」履歴を1件足す。
-    /// コピーが変更済みなら、コピーは残し、`carriedFromTaskID` だけ空にする。
-    /// コピーが見つからないときは、コピーには触らない。
-    /// コピーの ID が元タスク自身のときは、消さない。
+    /// 自分のコピーかは、相手の `carriedFromTaskID` が元の ID のときだけ。
+    /// 元タスク自身や、別のタスクを指しているときは、その相手には触らない。
+    /// 自分のコピーで、履歴が「作った」1件だけなら、コピーを消す。「消した」履歴を1件足す。
+    /// 自分のコピーが変更済みなら、コピーは残し、`carriedFromTaskID` だけ空にする。
     /// ページのつながり（PageLink）は消さない。変更は最後の1回で保存する。
     func cancelCarryForward(taskID: UUID) throws {
         guard let source = try storedTask(matchingID: taskID) else {
@@ -820,20 +820,21 @@ extension JournalStore {
         let foundCopy = try carriedToID.flatMap { candidateID in
             try storedTask(matchingID: candidateID)
         }
-        let linkedCopy: JournalTask?
-        if let foundCopy, foundCopy.id != sourceID {
-            linkedCopy = foundCopy
+        // deleteTask と同じ。相手が元を指し返しているときだけ、自分のコピーにする。
+        let ownCopy: JournalTask?
+        if let foundCopy, foundCopy.id != sourceID, foundCopy.carriedFromTaskID == sourceID {
+            ownCopy = foundCopy
         } else {
-            linkedCopy = nil
+            ownCopy = nil
         }
-        let relatedID = linkedCopy?.id ?? carriedToID
+        let relatedID = ownCopy?.id ?? carriedToID
         let relatedDayKey: String?
         let copyProgress: TaskProgress?
         let copyIsUnmodified: Bool
-        if let linkedCopy {
-            relatedDayKey = linkedCopy.daily?.dateKey
-            copyProgress = linkedCopy.progress
-            let copyHistories = try storedHistories(matchingTaskID: linkedCopy.id)
+        if let ownCopy {
+            relatedDayKey = ownCopy.daily?.dateKey
+            copyProgress = ownCopy.progress
+            let copyHistories = try storedHistories(matchingTaskID: ownCopy.id)
             copyIsUnmodified = isUnmodifiedCarryCopy(copyHistories)
         } else {
             relatedDayKey = nil
@@ -843,18 +844,18 @@ extension JournalStore {
 
         // ここから先は、保存の直前まで失敗しない。
         let instant = currentDate()
-        if let linkedCopy {
+        if let ownCopy {
             if copyIsUnmodified {
                 appendHistory(
-                    taskID: linkedCopy.id,
+                    taskID: ownCopy.id,
                     action: .deleted,
                     fromProgress: copyProgress,
                     toProgress: nil,
                     at: instant
                 )
-                context.delete(linkedCopy)
+                context.delete(ownCopy)
             } else {
-                linkedCopy.carriedFromTaskID = nil
+                ownCopy.carriedFromTaskID = nil
             }
         }
         source.isCarriedForward = false

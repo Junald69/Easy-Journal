@@ -722,11 +722,150 @@ final class JournalStoreCarryTests: XCTestCase {
         XCTAssertEqual(linksAfter.first?.id, linkID)
     }
 
+    /// 元の carriedToTaskID が、自分のコピーではない別タスクを指していても、その相手は変えない。
+    func testCancelCarryForwardLeavesUnrelatedTaskUntouched() throws {
+        let (store, context, container) = try makeStore()
+        let source = try store.addDailyTask(dateKey: "2026-10-27", title: "元")
+        let unrelated = try store.addDailyTask(dateKey: "2026-10-28", title: "別人")
+        let sourceID = source.id
+        let unrelatedID = unrelated.id
+        let strangerID = UUID()
+        let forwardID = UUID()
+        unrelated.carriedFromTaskID = strangerID
+        unrelated.carriedToTaskID = forwardID
+        unrelated.isCarriedForward = true
+        source.isCarriedForward = true
+        source.carriedToTaskID = unrelatedID
+        try context.save()
+        let historyBefore = try context.fetchCount(FetchDescriptor<TaskHistory>())
+
+        try store.cancelCarryForward(taskID: sourceID)
+
+        let other = ModelContext(container)
+        let tasks = try other.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(tasks.count, 2)
+        let storedSource = tasks.first { item in
+            item.id == sourceID
+        }
+        let storedOther = tasks.first { item in
+            item.id == unrelatedID
+        }
+        XCTAssertEqual(storedSource?.isCarriedForward, false)
+        XCTAssertNil(storedSource?.carriedToTaskID)
+        XCTAssertEqual(storedSource?.progressRaw, TaskProgress.open.rawValue)
+        XCTAssertEqual(storedSource?.title, "元")
+        XCTAssertEqual(storedOther?.title, "別人")
+        XCTAssertEqual(storedOther?.carriedFromTaskID, strangerID)
+        XCTAssertEqual(storedOther?.carriedToTaskID, forwardID)
+        XCTAssertEqual(storedOther?.isCarriedForward, true)
+        XCTAssertEqual(storedOther?.progressRaw, TaskProgress.open.rawValue)
+        XCTAssertEqual(storedOther?.sortOrder, unrelated.sortOrder)
+        XCTAssertEqual(storedOther?.daily?.dateKey, "2026-10-28")
+        XCTAssertEqual(
+            try histories(
+                in: other,
+                taskID: unrelatedID,
+                actionRaw: TaskHistoryAction.deleted.rawValue
+            ).count,
+            0
+        )
+        let cancelled = try histories(
+            in: other,
+            taskID: sourceID,
+            actionRaw: TaskHistoryAction.carryCancelled.rawValue
+        )
+        XCTAssertEqual(cancelled.count, 1)
+        XCTAssertEqual(cancelled.first?.relatedTaskID, unrelatedID)
+        XCTAssertNil(cancelled.first?.relatedDateKey)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore + 1)
+    }
+
+    /// A→B→C のあと A を取り消す。B は変更済みとして残り、B から C は残る。
+    func testCancelCarryForwardOnChainKeepsLaterLink() throws {
+        let (store, context, _) = try makeStore()
+        let taskA = try store.addDailyTask(dateKey: "2026-10-27", title: "A")
+        let taskB = try store.carryForward(taskID: taskA.id)
+        let taskC = try store.carryForward(taskID: taskB.id)
+        let taskAID = taskA.id
+        let taskBID = taskB.id
+        let taskCID = taskC.id
+        XCTAssertEqual(
+            try histories(
+                in: context,
+                taskID: taskBID,
+                actionRaw: TaskHistoryAction.created.rawValue
+            ).count,
+            1
+        )
+        XCTAssertEqual(
+            try histories(
+                in: context,
+                taskID: taskBID,
+                actionRaw: TaskHistoryAction.carriedForward.rawValue
+            ).count,
+            1
+        )
+
+        try store.cancelCarryForward(taskID: taskAID)
+
+        let tasks = try context.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(tasks.count, 3)
+        let storedA = tasks.first { item in
+            item.id == taskAID
+        }
+        let storedB = tasks.first { item in
+            item.id == taskBID
+        }
+        let storedC = tasks.first { item in
+            item.id == taskCID
+        }
+        XCTAssertEqual(storedA?.isCarriedForward, false)
+        XCTAssertNil(storedA?.carriedToTaskID)
+        XCTAssertEqual(storedA?.progressRaw, TaskProgress.open.rawValue)
+        XCTAssertEqual(storedA?.title, "A")
+        XCTAssertNil(storedB?.carriedFromTaskID)
+        XCTAssertEqual(storedB?.isCarriedForward, true)
+        XCTAssertEqual(storedB?.carriedToTaskID, taskCID)
+        XCTAssertEqual(storedB?.title, "A")
+        XCTAssertEqual(storedB?.daily?.dateKey, "2026-10-28")
+        XCTAssertEqual(storedC?.carriedFromTaskID, taskBID)
+        XCTAssertEqual(storedC?.isCarriedForward, false)
+        XCTAssertNil(storedC?.carriedToTaskID)
+        XCTAssertEqual(storedC?.title, "A")
+        XCTAssertEqual(storedC?.daily?.dateKey, "2026-10-29")
+        XCTAssertEqual(
+            try histories(
+                in: context,
+                taskID: taskBID,
+                actionRaw: TaskHistoryAction.deleted.rawValue
+            ).count,
+            0
+        )
+        XCTAssertEqual(
+            try histories(
+                in: context,
+                taskID: taskCID,
+                actionRaw: TaskHistoryAction.deleted.rawValue
+            ).count,
+            0
+        )
+        XCTAssertEqual(try pageLinks(in: context, typeRaw: PageLinkType.carryOver.rawValue).count, 2)
+    }
+
     /// あとの保存が失敗したら、コピーと元の変更は残らない。翌日の Daily だけは残ってよい。
     ///
-    /// 同じ月の翌日なので、コード上の保存は「翌日の日ページ」が1回、そのあとが1回。
-    /// 1回目だけ成功させ、2回目で失敗させる。この回数は、実行せずにコードを読んで数えた。
+    /// 先に成功する実行で保存回数を数え、最後の1回だけ失敗させる。
     func testCarryForwardRollsBackWhenLaterSaveThrows() throws {
+        let saveCount = try measuredSaveCount(
+            prepare: { setup in
+                try setup.addDailyTask(dateKey: "2026-10-27", title: "残す").id
+            },
+            operate: { probed, preparedID in
+                _ = try probed.carryForward(taskID: preparedID)
+            }
+        )
+        XCTAssertGreaterThan(saveCount, 0)
+
         let container = try StorageLocation.makeContainer(inMemory: true)
         let context = ModelContext(container)
         let instant = fixedNow
@@ -737,21 +876,15 @@ final class JournalStoreCarryTests: XCTestCase {
         XCTAssertEqual(historyBefore, 1)
         XCTAssertNil(try setup.findDaily(dateKey: "2026-10-28"))
 
-        let budget = SaveBudget(remaining: 1)
-        let store = JournalStore(context: context, now: { instant }, save: { modelContext in
-            if budget.remaining > 0 {
-                budget.remaining -= 1
-                try modelContext.save()
-                return
-            }
-            throw ForcedSaveError.forced
-        })
+        let tally = SaveTally()
+        tally.failAt = saveCount
+        let store = probedStore(context: context, tally: tally)
 
         XCTAssertThrowsError(try store.carryForward(taskID: sourceID)) { error in
             XCTAssertEqual(error as? ForcedSaveError, .forced)
         }
 
-        XCTAssertEqual(budget.remaining, 0)
+        XCTAssertEqual(tally.calls, saveCount)
         XCTAssertFalse(context.hasChanges)
         let tasks = try context.fetch(FetchDescriptor<JournalTask>())
         XCTAssertEqual(tasks.count, 1)
@@ -785,21 +918,41 @@ final class JournalStoreCarryTests: XCTestCase {
     }
 
     /// 取り消しの保存が失敗したら、元もコピーも履歴も、失敗の前のまま。
-    /// 翌日の Daily は、繰越のときに保存済みなので残る（残ってよい）。
+    /// 未変更コピーを消す経路。翌日の Daily は、繰越のときに保存済みなので残る（残ってよい）。
+    /// 保存回数は、成功する実行で数えて、最後の1回だけ失敗させる。
     func testCancelCarryForwardRollsBackWhenSaveThrows() throws {
-        let flag = ThrowSwitch()
-        let (store, context, container) = try makeThrowingStore(shouldThrow: { flag.isOn })
-        let source = try store.addDailyTask(dateKey: "2026-10-27", title: "残す")
+        let saveCount = try measuredSaveCount(
+            prepare: { setup in
+                let source = try setup.addDailyTask(dateKey: "2026-10-27", title: "残す")
+                _ = try setup.carryForward(taskID: source.id)
+                return source.id
+            },
+            operate: { probed, preparedID in
+                try probed.cancelCarryForward(taskID: preparedID)
+            }
+        )
+        XCTAssertGreaterThan(saveCount, 0)
+
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let instant = fixedNow
+        let setup = JournalStore(context: context, now: { instant })
+        let source = try setup.addDailyTask(dateKey: "2026-10-27", title: "残す")
         let sourceID = source.id
-        let copy = try store.carryForward(taskID: sourceID)
+        let copy = try setup.carryForward(taskID: sourceID)
         let copyID = copy.id
         let historyBefore = try context.fetchCount(FetchDescriptor<TaskHistory>())
         XCTAssertEqual(historyBefore, 3)
-        flag.isOn = true
+
+        let tally = SaveTally()
+        tally.failAt = saveCount
+        let store = probedStore(context: context, tally: tally)
 
         XCTAssertThrowsError(try store.cancelCarryForward(taskID: sourceID)) { error in
             XCTAssertEqual(error as? ForcedSaveError, .forced)
         }
+
+        XCTAssertEqual(tally.calls, saveCount)
 
         XCTAssertFalse(context.hasChanges)
         let tasks = try context.fetch(FetchDescriptor<JournalTask>())
@@ -832,6 +985,89 @@ final class JournalStoreCarryTests: XCTestCase {
         XCTAssertEqual(otherCopy?.carriedFromTaskID, sourceID)
         XCTAssertEqual(try other.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore)
         // 翌日の Daily は残ってよい。取り消しの前から保存されているので、失敗しても残る。
+        XCTAssertNotNil(try other.fetch(FetchDescriptor<DailyPage>()).first { item in
+            item.dateKey == "2026-10-28"
+        })
+    }
+
+    /// 変更済みコピーを残す取り消しで、保存が失敗したら、元もコピーも戻る。
+    /// 保存回数は、成功する実行で数えて、最後の1回だけ失敗させる。
+    func testCancelCarryForwardRollsBackModifiedCopyWhenSaveThrows() throws {
+        let saveCount = try measuredSaveCount(
+            prepare: { setup in
+                let source = try setup.addDailyTask(dateKey: "2026-10-27", title: "残す")
+                let copy = try setup.carryForward(taskID: source.id)
+                try setup.editTaskTitle(taskID: copy.id, title: "変えた")
+                return source.id
+            },
+            operate: { probed, preparedID in
+                try probed.cancelCarryForward(taskID: preparedID)
+            }
+        )
+        XCTAssertGreaterThan(saveCount, 0)
+
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let instant = fixedNow
+        let setup = JournalStore(context: context, now: { instant })
+        let source = try setup.addDailyTask(dateKey: "2026-10-27", title: "残す")
+        let sourceID = source.id
+        let copy = try setup.carryForward(taskID: sourceID)
+        let copyID = copy.id
+        try setup.editTaskTitle(taskID: copyID, title: "変えた")
+        let historyBefore = try context.fetchCount(FetchDescriptor<TaskHistory>())
+        XCTAssertEqual(historyBefore, 4)
+
+        let tally = SaveTally()
+        tally.failAt = saveCount
+        let store = probedStore(context: context, tally: tally)
+
+        XCTAssertThrowsError(try store.cancelCarryForward(taskID: sourceID)) { error in
+            XCTAssertEqual(error as? ForcedSaveError, .forced)
+        }
+
+        XCTAssertEqual(tally.calls, saveCount)
+        XCTAssertFalse(context.hasChanges)
+        let tasks = try context.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(tasks.count, 2)
+        let storedSource = tasks.first { item in
+            item.id == sourceID
+        }
+        let storedCopy = tasks.first { item in
+            item.id == copyID
+        }
+        XCTAssertEqual(storedSource?.isCarriedForward, true)
+        XCTAssertEqual(storedSource?.carriedToTaskID, copyID)
+        XCTAssertEqual(storedSource?.progressRaw, TaskProgress.open.rawValue)
+        XCTAssertEqual(storedSource?.title, "残す")
+        XCTAssertEqual(storedCopy?.title, "変えた")
+        XCTAssertEqual(storedCopy?.carriedFromTaskID, sourceID)
+        XCTAssertEqual(storedCopy?.isCarriedForward, false)
+        XCTAssertNil(storedCopy?.carriedToTaskID)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore)
+        XCTAssertEqual(
+            try histories(
+                in: context,
+                taskID: sourceID,
+                actionRaw: TaskHistoryAction.carryCancelled.rawValue
+            ).count,
+            0
+        )
+
+        let other = ModelContext(container)
+        let otherTasks = try other.fetch(FetchDescriptor<JournalTask>())
+        XCTAssertEqual(otherTasks.count, 2)
+        let otherSource = otherTasks.first { item in
+            item.id == sourceID
+        }
+        let otherCopy = otherTasks.first { item in
+            item.id == copyID
+        }
+        XCTAssertEqual(otherSource?.isCarriedForward, true)
+        XCTAssertEqual(otherSource?.carriedToTaskID, copyID)
+        XCTAssertEqual(otherCopy?.title, "変えた")
+        XCTAssertEqual(otherCopy?.carriedFromTaskID, sourceID)
+        XCTAssertEqual(try other.fetchCount(FetchDescriptor<TaskHistory>()), historyBefore)
         XCTAssertNotNil(try other.fetch(FetchDescriptor<DailyPage>()).first { item in
             item.dateKey == "2026-10-28"
         })
@@ -959,35 +1195,41 @@ final class JournalStoreCarryTests: XCTestCase {
         return (store, context, container)
     }
 
-    private final class ThrowSwitch {
-        var isOn = false
-    }
-
-    private final class SaveBudget {
-        var remaining: Int
-
-        init(remaining: Int) {
-            self.remaining = remaining
-        }
+    private final class SaveTally {
+        var calls = 0
+        var failAt: Int?
     }
 
     private enum ForcedSaveError: Error, Equatable {
         case forced
     }
 
-    private func makeThrowingStore(
-        shouldThrow: @escaping () -> Bool
-    ) throws -> (store: JournalStore, context: ModelContext, container: ModelContainer) {
-        let container = try StorageLocation.makeContainer(inMemory: true)
-        let context = ModelContext(container)
+    /// 保存の回数を数える。failAt 回目だけ失敗させる。1 から数える。
+    private func probedStore(context: ModelContext, tally: SaveTally) -> JournalStore {
         let instant = fixedNow
-        let store = JournalStore(context: context, now: { instant }, save: { modelContext in
-            if shouldThrow() {
+        return JournalStore(context: context, now: { instant }, save: { modelContext in
+            tally.calls += 1
+            if tally.failAt == tally.calls {
                 throw ForcedSaveError.forced
             }
             try modelContext.save()
         })
-        return (store, context, container)
+    }
+
+    /// 準備の保存は数えない。そのあとの操作が呼んだ保存の回数だけ返す。
+    private func measuredSaveCount(
+        prepare: (JournalStore) throws -> UUID,
+        operate: (JournalStore, UUID) throws -> Void
+    ) throws -> Int {
+        let container = try StorageLocation.makeContainer(inMemory: true)
+        let context = ModelContext(container)
+        let instant = fixedNow
+        let setup = JournalStore(context: context, now: { instant })
+        let preparedID = try prepare(setup)
+        let tally = SaveTally()
+        let store = probedStore(context: context, tally: tally)
+        try operate(store, preparedID)
+        return tally.calls
     }
 
     private func histories(
