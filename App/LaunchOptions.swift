@@ -14,11 +14,16 @@ struct LaunchOptions {
     /// 画面テストが、App Group の保存先に触れないための印。メモリ上だけにする。
     let inMemoryStore: Bool
 
+    /// `-todayKey` の次に書かれた文字列。無ければ nil。
+    /// ここで読むだけ。今日として使うかは、アプリの起動側が決める。
+    let todayKey: String?
+
     /// `ProcessInfo.processInfo.arguments` から読む。
     init(arguments: [String] = ProcessInfo.processInfo.arguments) {
         var sampleData = false
         var openPage: String?
         var inMemoryStore = false
+        var todayKey: String?
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
@@ -32,11 +37,18 @@ struct LaunchOptions {
                 }
             } else if argument == "-inMemoryStore" {
                 inMemoryStore = true
+            } else if argument == "-todayKey" {
+                let valueIndex = index + 1
+                if valueIndex < arguments.count {
+                    todayKey = arguments[valueIndex]
+                    index = valueIndex
+                }
             }
             index += 1
         }
         self.sampleData = sampleData
         self.openPage = openPage
         self.inMemoryStore = inMemoryStore
+        self.todayKey = todayKey
     }
 }

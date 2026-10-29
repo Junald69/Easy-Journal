@@ -1,10 +1,12 @@
+import Combine
+import Foundation
 import SwiftData
 import SwiftUI
 
 /// アプリの入口。
 ///
 /// 起動時に保存の入れ物（`ModelContainer`）を作る。
-/// 成功したときは、仮の画面で「Easy Journal」と、いま開いているページの文字を出す。
+/// 成功したときは、月の記録なら Monthly Log の画面、それ以外は仮の画面を出す。
 /// 失敗したときは、クラッシュさせず、エラーの画面を出す。
 /// データを消したり、別の場所に作り直したりはしない。
 ///
@@ -13,24 +15,44 @@ import SwiftUI
 /// 条件を満たすときだけ見本を入れる。入れ損ねても、クラッシュさせず、そのまま起動する。
 /// `-openPage` の文字列が読めたときは、そのページを最初のページにする。
 /// 無いか、読めないときは、いまの月の記録（Monthly Log）のまま。
-/// 本物の月ページなどは、次のチケット（T-111 以降）で作る。
+/// 開いている月は、起動のときに決めたまま。日付が変わっても月は動かさない。
+/// `-todayKey` は、Debug かつ `-inMemoryStore` のときだけ、「今日」を固定する。
+/// 今日の日付キーは、起動時だけでなく、画面に戻ったときと、日やタイムゾーンが変わったときにも計算し直す。
 @main
 struct EasyJournalApp: App {
     /// 開けた保存の入れ物。失敗したときは nil。
     private let modelContainer: ModelContainer?
     /// 失敗したときの説明。成功したときは nil。
     private let storageErrorMessage: String?
+    /// 起動引数。今日の再計算でも、同じ条件で固定日を見る。
+    private let launchOptions: LaunchOptions
+    /// 今日の日付キー。月の画面に渡す。同じ日なら書き換えない。
+    @State private var todayKey: String
     /// 今どのページを開いているか。成功の画面だけに渡す。
     @State private var router: Router
+    /// シーンが前面にいるか。アクティブに戻ったときに今日を計算し直す。
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let options = LaunchOptions()
+        launchOptions = options
+        let now = Date()
+        let calendar = DateKey.makeCalendar()
         let launchRouter = LaunchPage.makeRouter(
             openPage: options.openPage,
-            now: Date(),
-            calendar: DateKey.makeCalendar()
+            now: now,
+            calendar: calendar
         )
         _router = State(initialValue: launchRouter)
+        _todayKey = State(
+            initialValue: TodayKeyResolver.resolve(
+                fixedDayKey: options.todayKey,
+                inMemoryStore: options.inMemoryStore,
+                isDebugBuild: EasyJournalApp.debugBuild,
+                now: now,
+                calendar: calendar
+            )
+        )
         do {
             let container = try StorageLocation.makeContainer(inMemory: options.inMemoryStore)
             modelContainer = container
@@ -58,16 +80,61 @@ struct EasyJournalApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if let modelContainer {
-                PlaceholderPageView(router: router)
-                    .modelContainer(modelContainer)
-            } else {
-                VStack(spacing: 16) {
-                    Text("保存先を開けませんでした。")
-                    Text(storageErrorMessage ?? "")
+            Group {
+                if let modelContainer {
+                    RootPageView(router: router, todayKey: todayKey)
+                        .modelContainer(modelContainer)
+                } else {
+                    VStack(spacing: 16) {
+                        Text("保存先を開けませんでした。")
+                        Text(storageErrorMessage ?? "")
+                    }
+                    .padding()
                 }
-                .padding()
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    refreshTodayKey(resetTimeZone: false)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+                refreshTodayKey(resetTimeZone: false)
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: NSNotification.Name.NSSystemTimeZoneDidChange)
+            ) { _ in
+                refreshTodayKey(resetTimeZone: true)
+            }
+        }
+    }
+
+    /// Debug ビルドのときだけ true。Release では false。分岐はここに置く。
+    private static var debugBuild: Bool {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    /// 今日の日付キーを計算し直す。同じ文字列なら State は変えない。
+    ///
+    /// 暦は毎回 `DateKey.makeCalendar()` で作り直す。前に作った暦は使い回さない。
+    /// タイムゾーンが変わったときは、その前にキャッシュを捨てる。
+    private func refreshTodayKey(resetTimeZone: Bool) {
+        if resetTimeZone {
+            NSTimeZone.resetSystemTimeZone()
+        }
+        let calendar = DateKey.makeCalendar()
+        let resolved = TodayKeyResolver.resolve(
+            fixedDayKey: launchOptions.todayKey,
+            inMemoryStore: launchOptions.inMemoryStore,
+            isDebugBuild: EasyJournalApp.debugBuild,
+            now: Date(),
+            calendar: calendar
+        )
+        if resolved != todayKey {
+            todayKey = resolved
         }
     }
 }
