@@ -5,20 +5,8 @@ import XCTest
 /// 月の行のルール。保存先は使わない。画面も使わない。
 final class MonthlyLogRowsTests: XCTestCase {
     /// 2026年10月は31行。1日は木曜。3日と4日は土日。最後は31日。
-    func testOctober2026HasThirtyOneRows() throws {
-        let tokyo = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
-        let newYork = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
-        let tokyoRows = makeOctober(
-            todayKey: "2026-10-27",
-            calendar: DateKey.makeCalendar(timeZone: tokyo)
-        )
-        let newYorkRows = makeOctober(
-            todayKey: "2026-10-27",
-            calendar: DateKey.makeCalendar(timeZone: newYork)
-        )
-        XCTAssertEqual(tokyoRows, newYorkRows)
-
-        let rows = tokyoRows
+    func testOctober2026HasThirtyOneRows() {
+        let rows = makeOctober(todayKey: "2026-10-27")
         XCTAssertEqual(rows.count, 31)
         XCTAssertEqual(rows.map(\.dateKey), DateKey.dayKeys(inMonth: "2026-10"))
         guard rows.count == 31 else {
@@ -71,8 +59,7 @@ final class MonthlyLogRowsTests: XCTestCase {
             monthKey: "2028-02",
             textByDateKey: [:],
             dailyDateKeys: [],
-            todayKey: "2028-02-29",
-            calendar: DateKey.makeCalendar()
+            todayKey: "2028-02-29"
         )
         XCTAssertEqual(leap.count, 29)
         guard leap.count == 29 else {
@@ -88,8 +75,7 @@ final class MonthlyLogRowsTests: XCTestCase {
             monthKey: "2027-02",
             textByDateKey: [:],
             dailyDateKeys: [],
-            todayKey: "2027-02-28",
-            calendar: DateKey.makeCalendar()
+            todayKey: "2027-02-28"
         )
         XCTAssertEqual(common.count, 28)
         guard common.count == 28 else {
@@ -104,21 +90,20 @@ final class MonthlyLogRowsTests: XCTestCase {
             monthKey: "2026-13",
             textByDateKey: ["2026-13-01": "x"],
             dailyDateKeys: ["2026-13-01"],
-            todayKey: "2026-13-01",
-            calendar: DateKey.makeCalendar()
+            todayKey: "2026-13-01"
         )
         XCTAssertEqual(invalid.count, 0)
     }
 
     /// 今日がその月に無いときは、今日の行は無い。全部 false。
     func testTodayFlagOnlyWhenThatDayIsInTheMonth() {
-        let outside = makeOctober(todayKey: "2026-11-01", calendar: DateKey.makeCalendar())
+        let outside = makeOctober(todayKey: "2026-11-01")
         XCTAssertEqual(outside.count, 31)
         for row in outside {
             XCTAssertFalse(row.isToday, row.dateKey)
         }
 
-        let emptyToday = makeOctober(todayKey: "", calendar: DateKey.makeCalendar())
+        let emptyToday = makeOctober(todayKey: "")
         for row in emptyToday {
             XCTAssertFalse(row.isToday, row.dateKey)
         }
@@ -136,8 +121,7 @@ final class MonthlyLogRowsTests: XCTestCase {
                 "2026-10-32": "無い日",
             ],
             dailyDateKeys: ["2026-10-27", "2026-09-30", "bad"],
-            todayKey: "2026-10-02",
-            calendar: DateKey.makeCalendar()
+            todayKey: "2026-10-02"
         )
         XCTAssertEqual(rows.count, 31)
         guard rows.count == 31 else {
@@ -169,13 +153,12 @@ final class MonthlyLogRowsTests: XCTestCase {
         }
     }
 
-    private func makeOctober(todayKey: String, calendar: Calendar) -> [MonthlyLogRow] {
+    private func makeOctober(todayKey: String) -> [MonthlyLogRow] {
         MonthlyLogRows.make(
             monthKey: "2026-10",
             textByDateKey: [:],
             dailyDateKeys: [],
-            todayKey: todayKey,
-            calendar: calendar
+            todayKey: todayKey
         )
     }
 }

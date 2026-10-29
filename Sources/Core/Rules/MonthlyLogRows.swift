@@ -1,5 +1,3 @@
-import Foundation
-
 /// 月の左ページの、1日1行。画面には依存しない。
 struct MonthlyLogRow: Equatable {
     /// 日付キー（`yyyy-MM-dd`）。
@@ -25,19 +23,14 @@ struct MonthlyLogRow: Equatable {
 enum MonthlyLogRows {
     /// その月の日数ぶんの行を、1日から順に返す。不正な月キーなら空。
     ///
-    /// `calendar` は、呼び出し側が `DateKey.makeCalendar()` と同じものを渡す。
     /// 「今日」は、もう計算済みの日付キー（`todayKey`）で受け取る。
     /// ここでは暦を使って日付を動かさない。
     static func make(
         monthKey: String,
         textByDateKey: [String: String],
         dailyDateKeys: Set<String>,
-        todayKey: String,
-        calendar: Calendar
+        todayKey: String
     ) -> [MonthlyLogRow] {
-        // 日数と曜日は DateKey が決める。渡された暦で Date 同士を比べない。
-        _ = calendar.timeZone
-
         let dateKeys = DateKey.dayKeys(inMonth: monthKey)
         var rows: [MonthlyLogRow] = []
         for (offset, dateKey) in dateKeys.enumerated() {

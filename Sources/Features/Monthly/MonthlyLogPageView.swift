@@ -161,8 +161,7 @@ struct MonthlyLogPageView: View {
                 monthKey: monthKey,
                 textByDateKey: content.textByDateKey,
                 dailyDateKeys: content.dailyDateKeys,
-                todayKey: todayKey,
-                calendar: DateKey.makeCalendar()
+                todayKey: todayKey
             )
             return MonthlyLogSnapshot(rows: rows, failed: false)
         } catch {
