@@ -134,6 +134,86 @@ final class JournalStoreMonthlyLogTests: XCTestCase {
         XCTAssertEqual(content.textByDateKey.count, 1)
     }
 
+    /// setLogLine で書いた文字が、その月の読み出しに出る。書き換えと、空にして消すことも含む。
+    func testSetLogLineAppearsThenUpdatesThenDeletes() throws {
+        let (store, _, _) = try makeStore()
+
+        try store.setLogLine(dateKey: "2026-10-27", text: "書いた")
+        var content = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(content.textByDateKey["2026-10-27"], "書いた")
+        XCTAssertEqual(content.textByDateKey.count, 1)
+
+        try store.setLogLine(dateKey: "2026-10-27", text: "書き換えた")
+        content = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(content.textByDateKey["2026-10-27"], "書き換えた")
+        XCTAssertNil(content.textByDateKey["2026-10-28"])
+        XCTAssertEqual(content.textByDateKey.count, 1)
+
+        try store.setLogLine(dateKey: "2026-10-27", text: "  空白つき  ")
+        content = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(content.textByDateKey["2026-10-27"], "  空白つき  ")
+
+        try store.setLogLine(dateKey: "2026-10-27", text: "")
+        content = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertNil(content.textByDateKey["2026-10-27"])
+        XCTAssertTrue(content.textByDateKey.isEmpty)
+        XCTAssertNil(try store.logLine(dateKey: "2026-10-27"))
+    }
+
+    /// ほかの月の行は、その月の結果に入らない。同じ「日」でも混ざらない。
+    /// ページが無い月を読んでも、何も作らない。
+    func testLinesFromAnotherMonthStayOut() throws {
+        let (store, context, _) = try makeStore()
+        try store.setLogLine(dateKey: "2026-10-03", text: "十月の3日")
+        try store.setLogLine(dateKey: "2026-11-03", text: "十一月の3日")
+        try store.setLogLine(dateKey: "2026-10-04", text: "十月の4日")
+
+        let october = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(october.textByDateKey["2026-10-03"], "十月の3日")
+        XCTAssertEqual(october.textByDateKey["2026-10-04"], "十月の4日")
+        XCTAssertNil(october.textByDateKey["2026-11-03"])
+        XCTAssertFalse(october.textByDateKey.values.contains("十一月の3日"))
+        XCTAssertEqual(october.textByDateKey.count, 2)
+        XCTAssertTrue(october.dailyDateKeys.isEmpty)
+
+        let november = try store.monthlyLogContent(monthKey: "2026-11")
+        XCTAssertEqual(november.textByDateKey["2026-11-03"], "十一月の3日")
+        XCTAssertNil(november.textByDateKey["2026-10-03"])
+        XCTAssertNil(november.textByDateKey["2026-10-04"])
+        XCTAssertEqual(november.textByDateKey.count, 1)
+        XCTAssertTrue(november.dailyDateKeys.isEmpty)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 3)
+
+        let beforeUnreadMonth = try recordCounts(in: context)
+        let december = try store.monthlyLogContent(monthKey: "2026-12")
+        XCTAssertTrue(december.textByDateKey.isEmpty)
+        XCTAssertTrue(december.dailyDateKeys.isEmpty)
+        XCTAssertEqual(try recordCounts(in: context), beforeUnreadMonth)
+    }
+
+    /// 空白だけの入力は、行を作らない。すでにある行は消す。
+    func testWhitespaceOnlyRemovesOrSkipsLine() throws {
+        let (store, context, _) = try makeStore()
+        let before = try recordCounts(in: context)
+
+        try store.setLogLine(dateKey: "2026-10-08", text: "   ")
+        try store.setLogLine(dateKey: "2026-10-08", text: "\n")
+        try store.setLogLine(dateKey: "2026-10-08", text: " \n\t ")
+        var content = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertTrue(content.textByDateKey.isEmpty)
+        XCTAssertEqual(try recordCounts(in: context), before)
+
+        try store.setLogLine(dateKey: "2026-10-08", text: "残す")
+        content = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(content.textByDateKey["2026-10-08"], "残す")
+
+        try store.setLogLine(dateKey: "2026-10-08", text: "  \n ")
+        content = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertNil(content.textByDateKey["2026-10-08"])
+        XCTAssertTrue(content.textByDateKey.isEmpty)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 0)
+    }
+
     /// Daily の印は、中身がある日だけ。別の月の Daily は入らない。空の目次カードは入らない。
     func testDailyMarkNeedsContentAndStaysInMonth() throws {
         let (store, context, _) = try makeStore()

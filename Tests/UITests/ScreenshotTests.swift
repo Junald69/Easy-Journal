@@ -14,6 +14,31 @@ final class ScreenshotTests: XCTestCase {
         attachScreenshot(app, name: "02-monthly-top")
     }
 
+    /// 27日の文章を編集し、26日へ移したあと、27日に文字が残っている。
+    func testMonthlyLogEditKeepsTextOnAnotherRow() {
+        let editedText = "T112edit"
+        let app = launchMonthly()
+        waitForMonthlyLog(app)
+
+        let day27 = app.descendants(matching: .any)["monthlyLogText-2026-10-27"]
+        XCTAssertTrue(day27.waitForExistence(timeout: 10), "27日の文章がありません")
+        day27.tap()
+
+        let field = app.descendants(matching: .textField)["monthlyLogText-2026-10-27"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "27日の編集欄がありません")
+        field.tap()
+        field.typeText(editedText)
+
+        tapMonthlyText(app, dateKey: "2026-10-26")
+
+        let field26 = app.descendants(matching: .textField)["monthlyLogText-2026-10-26"]
+        XCTAssertTrue(field26.waitForExistence(timeout: 10), "26日の編集欄がありません")
+        waitUntilTextShows(app, dateKey: "2026-10-27", text: editedText)
+        let stillEditing27 = app.descendants(matching: .textField)["monthlyLogText-2026-10-27"]
+        XCTAssertFalse(stillEditing27.exists, "27日が編集欄のままです")
+        attachScreenshot(app, name: "04-monthly-edited")
+    }
+
     /// 文字を大きくしたときの月の画面。
     func testMonthlyLogLargeTextScreenshot() {
         let app = launchMonthly(extraArguments: [
@@ -53,6 +78,45 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(
             todayRow.waitForExistence(timeout: 10),
             "27日の行がありません"
+        )
+    }
+
+    /// 文章の部分を押す。隠れていたら、見えるまで少しずらす。固定の待ちは使わない。
+    private func tapMonthlyText(_ app: XCUIApplication, dateKey: String) {
+        let element = app.descendants(matching: .any)["monthlyLogText-" + dateKey]
+        XCTAssertTrue(
+            element.waitForExistence(timeout: 10),
+            dateKey + " の文章がありません"
+        )
+        var attempt = 0
+        while element.isHittable == false && attempt < 3 {
+            app.swipeDown()
+            attempt += 1
+        }
+        XCTAssertTrue(element.isHittable, dateKey + " の文章を押せません")
+        element.tap()
+    }
+
+    /// 読み上げの文か、欄の値に、入力した文字が出るまで待つ。
+    private func waitUntilTextShows(_ app: XCUIApplication, dateKey: String, text: String) {
+        let element = app.descendants(matching: .any)["monthlyLogText-" + dateKey]
+        let showed = NSPredicate(block: { evaluated, _ in
+            guard let rowText = evaluated as? XCUIElement else {
+                return false
+            }
+            if rowText.label.contains(text) {
+                return true
+            }
+            if let value = rowText.value as? String, value.contains(text) {
+                return true
+            }
+            return false
+        })
+        let expectation = XCTNSPredicateExpectation(predicate: showed, object: element)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [expectation], timeout: 10),
+            .completed,
+            "27日の文章が入力した文字になっていません"
         )
     }
 

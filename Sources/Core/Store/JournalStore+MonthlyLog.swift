@@ -13,16 +13,16 @@ extension JournalStore {
     /// その月の1行と、Daily がある日を返す。読むだけ。何も作らない・保存しない。
     ///
     /// 月ページが無いときは、空を返す。目次カードも行も作らない。
-    /// 1行は、保存してある行を1回取り、その月の日付だけを残す。
+    /// 1行は、`findMonthly` で取った月ページの行（logLines）だけを見る。全期間は取らない。
+    /// そこから、日付キーがその月のものだけを残す。不正な日付キーは無視する。
     /// 同じ日が複数あるときは、`logLine` と同じ。更新時刻が新しい方。同時刻なら id の文字順が大きい方。
-    /// 月に属さない日付キーと、不正な日付キーは無視する。
-    /// Daily は、目次カードを1回取り、種類が daily のものだけを Swift で残す。そのあと日付と中身で絞る。
+    /// Daily の印は、種類と月で絞って取る。空を許す日付は、取ったあと Swift で比べる。
     func monthlyLogContent(monthKey: String) throws -> MonthlyLogContent {
-        if try findMonthly(monthKey: monthKey) == nil {
+        guard let monthly = try findMonthly(monthKey: monthKey) else {
             return MonthlyLogContent(textByDateKey: [:], dailyDateKeys: [])
         }
-        let storedLines = try storedModels(MonthlyLogLine.self)
-        let textByDateKey = texts(in: storedLines, monthKey: monthKey)
+        let lines = Array(monthly.logLines ?? [])
+        let textByDateKey = texts(in: lines, monthKey: monthKey)
         let markedDateKeys = try dailyDateKeys(inMonth: monthKey)
         return MonthlyLogContent(
             textByDateKey: textByDateKey,
@@ -30,7 +30,7 @@ extension JournalStore {
         )
     }
 
-    /// 保存してある行から、その月の日だけを残し、同じ日は1件に選ぶ。
+    /// その月の行から、その月の日だけを残し、同じ日は1件に選ぶ。
     private func texts(in stored: [MonthlyLogLine], monthKey: String) -> [String: String] {
         var grouped: [String: [MonthlyLogLine]] = [:]
         for line in stored {
@@ -67,9 +67,11 @@ extension JournalStore {
         }
     }
 
-    /// 中身のある Daily の日付キー。その月だけ。目次カードの取得は1回。
+    /// 中身のある Daily の日付キー。その月だけ。
+    ///
+    /// 目次カードは、種類と月で1回だけ取る。日付（空を許す）と、中身の有無は Swift で残す。
     private func dailyDateKeys(inMonth monthKey: String) throws -> Set<String> {
-        let storedPages = try storedModels(Page.self)
+        let storedPages = try dailyPages(inMonth: monthKey)
         var marked: Set<String> = []
         for page in storedPages {
             guard page.kindRaw == PageKind.daily.rawValue else {

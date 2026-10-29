@@ -1,8 +1,10 @@
 import SwiftData
 import SwiftUI
 
-/// 月の左ページ（Monthly Log）。読むだけ。保存先には書かない。
+/// 月の左ページ（Monthly Log）。
 ///
+/// 文章の部分だけ、その場で1行を編集できる。保存は `setLogLine` だけ。
+/// 日付の数字と曜日は、この画面では何もしない。
 /// 上のボタンは、まだ動かない。押しても何もしない。
 struct MonthlyLogPageView: View {
     /// 表示する月（`yyyy-MM`）。
@@ -11,28 +13,75 @@ struct MonthlyLogPageView: View {
     let todayKey: String
 
     @Environment(\.modelContext) private var modelContext
+    /// アプリが前面から離れたときに、編集中の行を確定する。
+    @Environment(\.scenePhase) private var scenePhase
 
-    var body: some View {
-        loadedBody(load())
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background {
-                GridPaperBackground()
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("monthlyLogScreen")
+    /// 保存先から読んだ、その月の1行。編集中の下書きとは別。
+    @State private var textByDateKey: [String: String] = [:]
+    /// 中身のある Daily がある日。
+    @State private var dailyDateKeys: Set<String> = []
+    /// 読み出しに失敗したとき true。
+    @State private var loadFailed = false
+    /// 保存に失敗したとき true。成功したら false。
+    @State private var saveFailed = false
+    /// いま編集している日。無いときは nil。
+    @State private var editingDateKey: String? = nil
+    /// 編集中の文章。読み直しでは消さない。
+    @State private var draftText = ""
+    /// 行の切り替え中は、フォーカスが一度外れても保存しない。
+    @State private var isMovingEdit = false
+    /// 編集欄に、一度フォーカスが乗ったあとだけ、外れたときに保存する。
+    @State private var editFocusLanded = false
+    /// どの行の編集欄にフォーカスがあるか。
+    @FocusState private var focusedDateKey: String?
+
+    /// 今日の帯は、読み出しのあとではなく、渡された今日の日付から計算する。
+    /// 日付が変わっても、開いている月はそのまま。帯だけが動く。
+    private var rows: [MonthlyLogRow] {
+        MonthlyLogRows.make(
+            monthKey: monthKey,
+            textByDateKey: textByDateKey,
+            dailyDateKeys: dailyDateKeys,
+            todayKey: todayKey
+        )
     }
 
-    private func loadedBody(_ snapshot: MonthlyLogSnapshot) -> some View {
+    var body: some View {
         VStack(spacing: 0) {
             topBar
-            logList(snapshot)
-            if snapshot.failed {
+            logList
+            if loadFailed {
                 Text("記録を読み込めませんでした")
                     .font(DesignTokens.Fonts.subText)
                     .foregroundStyle(DesignTokens.inkSub)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(DesignTokens.Spacing.s)
             }
+            if saveFailed {
+                Text("保存できませんでした")
+                    .font(DesignTokens.Fonts.subText)
+                    .foregroundStyle(DesignTokens.inkSub)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(DesignTokens.Spacing.s)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background {
+            GridPaperBackground()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("monthlyLogScreen")
+        .onAppear {
+            reload()
+        }
+        .onChange(of: monthKey) { _, _ in
+            handleMonthChange()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            handleScenePhase(newPhase)
+        }
+        .onChange(of: focusedDateKey) { oldFocus, newFocus in
+            handleFocusChange(oldFocus: oldFocus, newFocus: newFocus)
         }
     }
 
@@ -85,7 +134,7 @@ struct MonthlyLogPageView: View {
         .accessibilityIdentifier(identifier)
     }
 
-    private func logList(_ snapshot: MonthlyLogSnapshot) -> some View {
+    private var logList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
@@ -94,15 +143,24 @@ struct MonthlyLogPageView: View {
                         .foregroundStyle(DesignTokens.inkSub)
                         .padding(.horizontal, DesignTokens.Spacing.l)
                         .padding(.vertical, DesignTokens.Spacing.s)
-                    ForEach(snapshot.rows, id: \.dateKey) { row in
+                    ForEach(rows, id: \.dateKey) { row in
                         logRow(row)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollContentBackground(.hidden)
+            .scrollDismissesKeyboard(.interactively)
             .onAppear {
-                scrollToToday(in: snapshot.rows, proxy: proxy)
+                scrollToToday(in: rows, proxy: proxy)
+            }
+            .onChange(of: editingDateKey) { _, newKey in
+                if let newKey {
+                    proxy.scrollTo(newKey, anchor: .top)
+                }
+            }
+            .onChange(of: monthKey) { _, _ in
+                scrollToToday(in: rows, proxy: proxy)
             }
         }
     }
@@ -125,47 +183,210 @@ struct MonthlyLogPageView: View {
                 .font(DesignTokens.Fonts.bodyText)
                 .foregroundStyle(dayColor(isWeekend: row.isWeekend))
                 .frame(minWidth: DesignTokens.gridSize * 2, alignment: .trailing)
+                .accessibilityHidden(true)
             Text(shortWeekday(row.weekday))
                 .font(DesignTokens.Fonts.bodyText)
                 .foregroundStyle(dayColor(isWeekend: row.isWeekend))
                 .frame(minWidth: DesignTokens.gridSize * 2, alignment: .leading)
-            Text(row.text)
-                .font(DesignTokens.Fonts.bodyText)
-                .foregroundStyle(DesignTokens.ink)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityHidden(true)
+            lineControl(row)
             if row.hasDaily {
                 Image(systemName: "doc.text")
                     .font(DesignTokens.Fonts.bodyText)
                     .foregroundStyle(DesignTokens.accent)
                     .accessibilityLabel("Dailyあり")
+                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.l)
         .padding(.vertical, DesignTokens.Spacing.xs)
         .frame(maxWidth: .infinity, minHeight: DesignTokens.gridSize * 2, alignment: .leading)
         .background(row.isToday ? DesignTokens.todayBand : Color.clear)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(spokenLabel(for: row))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("monthlyLogRow-" + row.dateKey)
         .id(row.dateKey)
     }
 
+    /// 編集中はその場の1行欄。それ以外は、文章だけを押せる。
+    @ViewBuilder
+    private func lineControl(_ row: MonthlyLogRow) -> some View {
+        if editingDateKey == row.dateKey {
+            TextField("", text: $draftText)
+                .font(DesignTokens.Fonts.bodyText)
+                .foregroundStyle(DesignTokens.ink)
+                .lineLimit(1)
+                .focused($focusedDateKey, equals: row.dateKey)
+                .submitLabel(.done)
+                .onSubmit {
+                    commitAndClose()
+                }
+                .onAppear {
+                    focusedDateKey = row.dateKey
+                }
+                .frame(maxWidth: .infinity, minHeight: DesignTokens.gridSize, alignment: .leading)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(DesignTokens.accent)
+                        .frame(height: 1)
+                }
+                .accessibilityIdentifier("monthlyLogText-" + row.dateKey)
+        } else {
+            Button {
+                editRow(dateKey: row.dateKey)
+            } label: {
+                Text(row.text)
+                    .font(DesignTokens.Fonts.bodyText)
+                    .foregroundStyle(DesignTokens.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, minHeight: DesignTokens.gridSize, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityLabel(spokenLabel(for: row))
+            .accessibilityHint("ダブルタップで文章を編集")
+            .accessibilityIdentifier("monthlyLogText-" + row.dateKey)
+        }
+    }
+
+    /// その日の文章を編集し始める。別の行を編集中なら、先に確定する。
+    /// 確定に失敗したときは、入力を残して、その行のままにする。
+    private func editRow(dateKey: String) {
+        if editingDateKey == dateKey {
+            focusedDateKey = dateKey
+            return
+        }
+        isMovingEdit = true
+        editFocusLanded = false
+        if let current = editingDateKey {
+            let saved = saveDraft(dateKey: current)
+            if saved == false {
+                isMovingEdit = false
+                editFocusLanded = true
+                focusedDateKey = current
+                return
+            }
+        }
+        draftText = textByDateKey[dateKey] ?? ""
+        editingDateKey = dateKey
+        focusedDateKey = dateKey
+    }
+
+    /// キーボードの確定。成功したら編集を閉じる。失敗したら欄に残す。
+    private func commitAndClose() {
+        guard let current = editingDateKey else {
+            return
+        }
+        isMovingEdit = true
+        editFocusLanded = false
+        let saved = saveDraft(dateKey: current)
+        if saved {
+            editingDateKey = nil
+            draftText = ""
+            focusedDateKey = nil
+        } else {
+            editFocusLanded = true
+            focusedDateKey = current
+        }
+        isMovingEdit = false
+    }
+
+    /// フォーカスが外れたときだけ確定する。行を移した直後の外れは無視する。
+    private func handleFocusChange(oldFocus: String?, newFocus: String?) {
+        if let landed = newFocus {
+            if let current = editingDateKey {
+                if landed == current {
+                    editFocusLanded = true
+                    isMovingEdit = false
+                    return
+                }
+            }
+        }
+        guard newFocus == nil else {
+            return
+        }
+        guard let previous = oldFocus else {
+            return
+        }
+        guard let current = editingDateKey else {
+            return
+        }
+        guard previous == current else {
+            return
+        }
+        guard editFocusLanded, isMovingEdit == false else {
+            return
+        }
+        let saved = saveDraft(dateKey: previous)
+        if saved {
+            editingDateKey = nil
+            draftText = ""
+            editFocusLanded = false
+        } else {
+            focusedDateKey = previous
+        }
+    }
+
+    /// 前面から離れたとき、編集中なら確定する。失敗しても入力は残す。
+    private func handleScenePhase(_ newPhase: ScenePhase) {
+        guard newPhase != .active else {
+            return
+        }
+        guard let current = editingDateKey else {
+            return
+        }
+        _ = saveDraft(dateKey: current)
+    }
+
+    /// 月が変わったら、編集中の行を確定してから読み直す。
+    private func handleMonthChange() {
+        if let current = editingDateKey {
+            isMovingEdit = true
+            editFocusLanded = false
+            let saved = saveDraft(dateKey: current)
+            if saved {
+                editingDateKey = nil
+                draftText = ""
+                focusedDateKey = nil
+            } else {
+                editFocusLanded = true
+            }
+            isMovingEdit = false
+        }
+        reload()
+    }
+
+    /// 下書きを保存する。入力の1文字ごとには呼ばない。
+    ///
+    /// 成功したら、編集中でない行の表示だけ読み直す。下書きはここでは消さない。
+    /// 失敗したら false。画面の文字は捨てない。
+    private func saveDraft(dateKey: String) -> Bool {
+        let store = JournalStore(context: modelContext)
+        do {
+            try store.setLogLine(dateKey: dateKey, text: draftText)
+        } catch {
+            saveFailed = true
+            return false
+        }
+        saveFailed = false
+        reload()
+        return true
+    }
+
     /// 環境の読み書きの窓口から、月の行を読む。失敗してもクラッシュしない。
-    private func load() -> MonthlyLogSnapshot {
+    /// 編集中の下書きは変えない。
+    private func reload() {
         let store = JournalStore(context: modelContext)
         do {
             let content = try store.monthlyLogContent(monthKey: monthKey)
-            let rows = MonthlyLogRows.make(
-                monthKey: monthKey,
-                textByDateKey: content.textByDateKey,
-                dailyDateKeys: content.dailyDateKeys,
-                todayKey: todayKey
-            )
-            return MonthlyLogSnapshot(rows: rows, failed: false)
+            textByDateKey = content.textByDateKey
+            dailyDateKeys = content.dailyDateKeys
+            loadFailed = false
         } catch {
-            return MonthlyLogSnapshot(rows: [], failed: true)
+            textByDateKey = [:]
+            dailyDateKeys = []
+            loadFailed = true
         }
     }
 
@@ -242,10 +463,4 @@ struct MonthlyLogPageView: View {
         }
         return parts.joined(separator: " ")
     }
-}
-
-/// 読み出しの結果。画面の中だけで使う。
-private struct MonthlyLogSnapshot {
-    var rows: [MonthlyLogRow]
-    var failed: Bool
 }
