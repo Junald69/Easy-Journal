@@ -13,15 +13,15 @@ extension JournalStore {
     /// その月の1行と、Daily がある日を返す。読むだけ。何も作らない・保存しない。
     ///
     /// 月ページが無いときは、空を返す。目次カードも行も作らない。
-    /// 1行は、`findMonthly` で取った月ページの行（logLines）だけを見る。全期間は取らない。
-    /// そこから、日付キーがその月のものだけを残す。不正な日付キーは無視する。
+    /// 1行は、保存してある行を全部取り、その月の日付だけを残す。どの月ページについているかは見ない。
+    /// 月ページにつながっていない行も候補に入る。不正な日付キーは無視する。
     /// 同じ日が複数あるときは、`logLine` と同じ。更新時刻が新しい方。同時刻なら id の文字順が大きい方。
     /// Daily の印は、種類と月で絞って取る。空を許す日付は、取ったあと Swift で比べる。
     func monthlyLogContent(monthKey: String) throws -> MonthlyLogContent {
-        guard let monthly = try findMonthly(monthKey: monthKey) else {
+        guard try findMonthly(monthKey: monthKey) != nil else {
             return MonthlyLogContent(textByDateKey: [:], dailyDateKeys: [])
         }
-        let lines = Array(monthly.logLines ?? [])
+        let lines = try storedLogLines()
         let textByDateKey = texts(in: lines, monthKey: monthKey)
         let markedDateKeys = try dailyDateKeys(inMonth: monthKey)
         return MonthlyLogContent(

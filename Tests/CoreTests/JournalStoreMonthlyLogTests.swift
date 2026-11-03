@@ -214,6 +214,122 @@ final class JournalStoreMonthlyLogTests: XCTestCase {
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 0)
     }
 
+    /// 同じ月の月ページが2つあるとき、画面は `logLine` と同じ行を出す。
+    /// 新しい行が、選ばれない方の月ページについていても、保存の前後で一致する。
+    func testContentMatchesLogLineWhenNewerLineIsOnAnotherMonthlyPage() throws {
+        let (store, context, _) = try makeStore()
+        let olderTime = Date(timeIntervalSince1970: 1_000)
+        let newerTime = Date(timeIntervalSince1970: 2_000)
+        let olderPage = Page(
+            kindRaw: PageKind.monthly.rawValue,
+            dateKey: nil,
+            monthKey: "2026-10",
+            createdByRaw: PageCreatedBy.system.rawValue,
+            createdAt: olderTime,
+            updatedAt: olderTime
+        )
+        let newerPage = Page(
+            kindRaw: PageKind.monthly.rawValue,
+            dateKey: nil,
+            monthKey: "2026-10",
+            createdByRaw: PageCreatedBy.system.rawValue,
+            createdAt: newerTime,
+            updatedAt: newerTime
+        )
+        let olderMonthly = MonthlyPage(monthKey: "2026-10")
+        let newerMonthly = MonthlyPage(monthKey: "2026-10")
+        context.insert(olderPage)
+        context.insert(newerPage)
+        context.insert(olderMonthly)
+        context.insert(newerMonthly)
+        olderPage.monthly = olderMonthly
+        newerPage.monthly = newerMonthly
+
+        let olderLine = MonthlyLogLine(
+            dateKey: "2026-10-27",
+            text: "選ばれた月ページ",
+            updatedAt: Date(timeIntervalSince1970: 10_000)
+        )
+        let newerLine = MonthlyLogLine(
+            dateKey: "2026-10-27",
+            text: "別の月ページ",
+            updatedAt: Date(timeIntervalSince1970: 20_000)
+        )
+        context.insert(olderLine)
+        context.insert(newerLine)
+        olderLine.monthly = olderMonthly
+        newerLine.monthly = newerMonthly
+        try context.save()
+
+        XCTAssertEqual(try store.findMonthly(monthKey: "2026-10")?.id, olderMonthly.id)
+        let beforeLine = try store.logLine(dateKey: "2026-10-27")
+        let beforeContent = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(beforeLine?.text, "別の月ページ")
+        XCTAssertEqual(beforeContent.textByDateKey["2026-10-27"], beforeLine?.text)
+
+        try store.setLogLine(dateKey: "2026-10-27", text: "書き換えた")
+        let afterLine = try store.logLine(dateKey: "2026-10-27")
+        let afterContent = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(afterLine?.text, "書き換えた")
+        XCTAssertEqual(afterContent.textByDateKey["2026-10-27"], afterLine?.text)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyLogLine>()), 2)
+        XCTAssertEqual(
+            try texts(on: "2026-10-27", in: context),
+            ["書き換えた", "選ばれた月ページ"]
+        )
+    }
+
+    /// いちばん新しい行が月ページにつながっていなくても、画面は `logLine` と同じ文字を出す。
+    func testContentMatchesLogLineWhenNewestLineHasNoMonthlyPage() throws {
+        let (store, context, _) = try makeStore()
+        let monthly = try store.findOrCreateMonthly(monthKey: "2026-10")
+        let attached = MonthlyLogLine(
+            dateKey: "2026-10-03",
+            text: "つながっている",
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let loose = MonthlyLogLine(
+            dateKey: "2026-10-03",
+            text: "つながっていない",
+            updatedAt: Date(timeIntervalSince1970: 2_000)
+        )
+        let otherMonth = MonthlyLogLine(
+            dateKey: "2026-11-03",
+            text: "来月でつながっていない",
+            updatedAt: Date(timeIntervalSince1970: 3_000)
+        )
+        let broken = MonthlyLogLine(
+            dateKey: "nope",
+            text: "壊れた",
+            updatedAt: Date(timeIntervalSince1970: 4_000)
+        )
+        context.insert(attached)
+        context.insert(loose)
+        context.insert(otherMonth)
+        context.insert(broken)
+        attached.monthly = monthly
+        try context.save()
+        XCTAssertNil(loose.monthly)
+        XCTAssertNil(otherMonth.monthly)
+        XCTAssertNil(broken.monthly)
+
+        let beforeLine = try store.logLine(dateKey: "2026-10-03")
+        let beforeContent = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(beforeLine?.text, "つながっていない")
+        XCTAssertEqual(beforeContent.textByDateKey["2026-10-03"], beforeLine?.text)
+        XCTAssertNil(beforeContent.textByDateKey["2026-11-03"])
+        XCTAssertNil(beforeContent.textByDateKey["nope"])
+        XCTAssertEqual(beforeContent.textByDateKey.count, 1)
+
+        try store.setLogLine(dateKey: "2026-10-03", text: "更新した")
+        let afterLine = try store.logLine(dateKey: "2026-10-03")
+        let afterContent = try store.monthlyLogContent(monthKey: "2026-10")
+        XCTAssertEqual(afterLine?.text, "更新した")
+        XCTAssertEqual(afterContent.textByDateKey["2026-10-03"], afterLine?.text)
+        XCTAssertNil(afterContent.textByDateKey["2026-11-03"])
+        XCTAssertEqual(afterContent.textByDateKey.count, 1)
+    }
+
     /// Daily の印は、中身がある日だけ。別の月の Daily は入らない。空の目次カードは入らない。
     func testDailyMarkNeedsContentAndStaysInMonth() throws {
         let (store, context, _) = try makeStore()
@@ -247,6 +363,19 @@ final class JournalStoreMonthlyLogTests: XCTestCase {
             now: { Date(timeIntervalSince1970: 1_700_000_000) }
         )
         return (store, context, container)
+    }
+
+    /// その日の行の文章。文字順に並べる。タプルでは比べない。
+    private func texts(on dateText: String, in context: ModelContext) throws -> [String] {
+        let stored = try context.fetch(FetchDescriptor<MonthlyLogLine>())
+        var found: [String] = []
+        for line in stored {
+            if line.dateKey == dateText {
+                found.append(line.text)
+            }
+        }
+        found.sort()
+        return found
     }
 
     private func recordCounts(in context: ModelContext) throws -> RecordCounts {

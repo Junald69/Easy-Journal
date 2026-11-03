@@ -326,6 +326,18 @@ enum JournalStoreError: Error, Equatable {
 // MARK: - 日ごとの記録
 
 extension JournalStore {
+    /// 保存してある1行を全部取る。`logLine` が見る候補と同じ。
+    ///
+    /// 月の画面は、選ばれた1つの月ページの行だけではなく、ここから同じ日を選ぶ。
+    /// 別の月ページについている行や、月ページにつながっていない行も入る。
+    /// 画面からは呼ばない。何も作らない・保存しない。
+    ///
+    /// `dateKey` は空を許さない文字列。`starts(with:)` を検索条件（`#Predicate`）に入れて
+    /// 月で絞れるかは未確認なので、ここでは条件を付けない。月の絞りは呼び出し側が Swift で行う。
+    func storedLogLines() throws -> [MonthlyLogLine] {
+        try context.fetch(FetchDescriptor<MonthlyLogLine>())
+    }
+
     /// その日の1行。無ければ nil。
     ///
     /// 同じ日が複数あるときは、更新時刻が一番新しいもの。同時刻なら id の文字順が大きい方。
