@@ -28,7 +28,11 @@ struct MonthlyLogPageView: View {
     @State private var editingDateKey: String? = nil
     /// 編集中の文章。読み直しでは消さない。
     @State private var draftText = ""
-    /// 行の切り替え中は、フォーカスが一度外れても保存しない。
+    /// 別の行へ移している途中だけ true。
+    ///
+    /// 前の編集欄が消えると、フォーカスが一度空になる。
+    /// その空を「外れた」と扱うと、移した先の下書きまで保存して閉じてしまう。
+    /// 移し終わるまで、その空では保存しない。
     @State private var isMovingEdit = false
     /// 編集欄に、一度フォーカスが乗ったあとだけ、外れたときに保存する。
     @State private var editFocusLanded = false
@@ -229,6 +233,7 @@ struct MonthlyLogPageView: View {
                         .fill(DesignTokens.accent)
                         .frame(height: 1)
                 }
+                .accessibilityLabel(editingAccessibilityLabel(for: row))
                 .accessibilityIdentifier("monthlyLogText-" + row.dateKey)
         } else {
             Button {
@@ -253,6 +258,10 @@ struct MonthlyLogPageView: View {
     /// その日の文章を編集し始める。別の行を編集中なら、先に確定する。
     /// 確定に失敗したときは、入力を残して、その行のままにする。
     private func editRow(dateKey: String) {
+        // 読み込み失敗中は文章を空で出している。編集すると、隠れた文章を上書きする。
+        guard loadFailed == false else {
+            return
+        }
         if editingDateKey == dateKey {
             focusedDateKey = dateKey
             return
@@ -328,9 +337,12 @@ struct MonthlyLogPageView: View {
         }
     }
 
-    /// 前面から離れたとき、編集中なら確定する。失敗しても入力は残す。
+    /// 背面に回ったときだけ、編集中なら確定する。失敗しても入力は残す。
+    ///
+    /// `.inactive`（コントロールセンターや着信など、一時的に前面を外れた状態）では保存しない。
+    /// その瞬間に下書きが空だと、その日の行が消える。
     private func handleScenePhase(_ newPhase: ScenePhase) {
-        guard newPhase != .active else {
+        guard newPhase == .background else {
             return
         }
         guard let current = editingDateKey else {
@@ -444,6 +456,19 @@ struct MonthlyLogPageView: View {
         case .saturday:
             return "土曜日"
         }
+    }
+
+    /// 編集欄の読み上げ。どの日の欄かを含む。入力中の文字は、欄の値として残す。
+    private func editingAccessibilityLabel(for row: MonthlyLogRow) -> String {
+        var parts: [String] = [
+            String(row.dayNumber) + "日",
+            spokenWeekday(row.weekday),
+            row.dateKey
+        ]
+        if row.isToday {
+            parts.append("今日")
+        }
+        return parts.joined(separator: " ")
     }
 
     /// 1行を、読み上げ用の1つの文にする。空の日に「未記入」とは言わない。
