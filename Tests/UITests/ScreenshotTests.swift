@@ -51,13 +51,14 @@ final class ScreenshotTests: XCTestCase {
         deleteAllCharacters(in: field, knownText: original, app: app)
         field.typeText(XCUIKeyboardKey.return.rawValue)
 
-        let alert = app.alerts["この行を消しますか？"]
+        let alert = app.alerts["この行を消しますか？"].firstMatch
         XCTAssertTrue(alert.waitForExistence(timeout: 10), "削除の確認が出ません")
-        let cancelButton = alert.buttons["キャンセル"]
-        let deleteButton = alert.buttons["消す"]
+        let cancelButton = alert.buttons["キャンセル"].firstMatch
+        let deleteButton = alert.buttons["消す"].firstMatch
         XCTAssertTrue(cancelButton.waitForExistence(timeout: 5), "キャンセルがありません")
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5), "消すがありません")
         attachScreenshot(app, name: "05-monthly-delete-confirm")
+        waitUntilHittable(cancelButton, message: "キャンセルを押せません")
         cancelButton.tap()
 
         waitUntilGone(alert, message: "確認が閉じません")
@@ -68,10 +69,13 @@ final class ScreenshotTests: XCTestCase {
         deleteAllCharacters(in: fieldAgain, knownText: original, app: app)
         fieldAgain.typeText(XCUIKeyboardKey.return.rawValue)
 
-        let alertAgain = app.alerts["この行を消しますか？"]
+        let alertAgain = app.alerts["この行を消しますか？"].firstMatch
         XCTAssertTrue(alertAgain.waitForExistence(timeout: 10), "もう一度、削除の確認が出ません")
-        let confirmButton = alertAgain.buttons["消す"]
+        let cancelAgain = alertAgain.buttons["キャンセル"].firstMatch
+        let confirmButton = alertAgain.buttons["消す"].firstMatch
+        XCTAssertTrue(cancelAgain.waitForExistence(timeout: 5), "キャンセルがありません")
         XCTAssertTrue(confirmButton.waitForExistence(timeout: 5), "消すがありません")
+        waitUntilHittable(confirmButton, message: "消すを押せません")
         confirmButton.tap()
 
         waitUntilGone(alertAgain, message: "確認が閉じません")
@@ -272,6 +276,22 @@ final class ScreenshotTests: XCTestCase {
             XCTWaiter().wait(for: [expectation], timeout: 10),
             .completed,
             dateKey + " の文章が残っています"
+        )
+    }
+
+    /// ボタンが押せるまで待つ。同じ見た目の要素が複数あっても、渡した1つだけを見る。
+    private func waitUntilHittable(_ element: XCUIElement, message: String) {
+        let hittable = NSPredicate(block: { evaluated, _ in
+            guard let button = evaluated as? XCUIElement else {
+                return false
+            }
+            return button.isHittable
+        })
+        let ready = XCTNSPredicateExpectation(predicate: hittable, object: element)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [ready], timeout: 5),
+            .completed,
+            message
         )
     }
 
