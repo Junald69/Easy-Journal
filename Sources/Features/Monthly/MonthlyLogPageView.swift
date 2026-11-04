@@ -4,6 +4,7 @@ import SwiftUI
 /// 月の左ページ（Monthly Log）。
 ///
 /// 文章の部分だけ、その場で1行を編集できる。保存は `setLogLine` だけ。
+/// 文章がある行を空にして確定するときは、消す前に確認する。
 /// 日付の数字と曜日は、この画面では何もしない。
 /// 上のボタンは、まだ動かない。押しても何もしない。
 struct MonthlyLogPageView: View {
@@ -38,6 +39,11 @@ struct MonthlyLogPageView: View {
     @State private var editFocusLanded = false
     /// どの行の編集欄にフォーカスがあるか。
     @FocusState private var focusedDateKey: String?
+    /// 文章がある行を空にして確定する前の、確認待ちの日。無いときは nil。
+    ///
+    /// アラートを出しているあいだ、フォーカスは外れる。
+    /// この値が入っているあいだは、外れても保存しない。もう一度確認も出さない。
+    @State private var pendingDeleteDateKey: String? = nil
 
     /// 今日の帯は、読み出しのあとではなく、渡された今日の日付から計算する。
     /// 日付が変わっても、開いている月はそのまま。帯だけが動く。
@@ -87,6 +93,36 @@ struct MonthlyLogPageView: View {
         .onChange(of: focusedDateKey) { oldFocus, newFocus in
             handleFocusChange(oldFocus: oldFocus, newFocus: newFocus)
         }
+        .alert(
+            "この行を消しますか？",
+            isPresented: pendingDeletePresented,
+            presenting: pendingDeleteDateKey
+        ) { dateKey in
+            Button("消す", role: .destructive) {
+                confirmDelete(dateKey: dateKey)
+            }
+            .accessibilityIdentifier("monthlyLogDeleteConfirm")
+            Button("キャンセル", role: .cancel) {
+                cancelDelete(dateKey: dateKey)
+            }
+            .accessibilityIdentifier("monthlyLogDeleteCancel")
+        } message: { _ in
+            EmptyView()
+        }
+    }
+
+    /// 確認のアラートを出しているか。閉じたときは、待っている日を消す。
+    ///
+    /// ボタンの処理は、表示したときの日付を受け取る。ここで日付を消しても、消す・戻すは実行できる。
+    private var pendingDeletePresented: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteDateKey != nil },
+            set: { showsAlert in
+                if showsAlert == false {
+                    pendingDeleteDateKey = nil
+                }
+            }
+        )
     }
 
     private var topBar: some View {
@@ -257,7 +293,13 @@ struct MonthlyLogPageView: View {
 
     /// その日の文章を編集し始める。別の行を編集中なら、先に確定する。
     /// 確定に失敗したときは、入力を残して、その行のままにする。
+    ///
+    /// 今の行を空にして消すときは、確認を出して移動を止める。移動先は開かない。
+    /// 確認を出しているあいだは、何もしない。
     private func editRow(dateKey: String) {
+        if pendingDeleteDateKey != nil {
+            return
+        }
         // 読み込み失敗中は文章を空で出している。編集すると、隠れた文章を上書きする。
         guard loadFailed == false else {
             return
@@ -265,6 +307,12 @@ struct MonthlyLogPageView: View {
         if editingDateKey == dateKey {
             focusedDateKey = dateKey
             return
+        }
+        if let current = editingDateKey {
+            if draftDeletesExistingLine(dateKey: current) {
+                pendingDeleteDateKey = current
+                return
+            }
         }
         isMovingEdit = true
         editFocusLanded = false
@@ -283,8 +331,17 @@ struct MonthlyLogPageView: View {
     }
 
     /// キーボードの確定。成功したら編集を閉じる。失敗したら欄に残す。
+    ///
+    /// 文章がある行を空にするときは、保存せず確認を出す。
     private func commitAndClose() {
         guard let current = editingDateKey else {
+            return
+        }
+        if pendingDeleteDateKey != nil {
+            return
+        }
+        if draftDeletesExistingLine(dateKey: current) {
+            pendingDeleteDateKey = current
             return
         }
         isMovingEdit = true
@@ -302,7 +359,13 @@ struct MonthlyLogPageView: View {
     }
 
     /// フォーカスが外れたときだけ確定する。行を移した直後の外れは無視する。
+    ///
+    /// 確認を出しているあいだは、何もしない。アラート自体がフォーカスを外すため。
+    /// 文章がある行を空にするときは、保存せず確認を出す。
     private func handleFocusChange(oldFocus: String?, newFocus: String?) {
+        if pendingDeleteDateKey != nil {
+            return
+        }
         if let landed = newFocus {
             if let current = editingDateKey {
                 if landed == current {
@@ -327,6 +390,10 @@ struct MonthlyLogPageView: View {
         guard editFocusLanded, isMovingEdit == false else {
             return
         }
+        if draftDeletesExistingLine(dateKey: previous) {
+            pendingDeleteDateKey = previous
+            return
+        }
         let saved = saveDraft(dateKey: previous)
         if saved {
             editingDateKey = nil
@@ -341,6 +408,8 @@ struct MonthlyLogPageView: View {
     ///
     /// `.inactive`（コントロールセンターや着信など、一時的に前面を外れた状態）では保存しない。
     /// その瞬間に下書きが空だと、その日の行が消える。
+    /// 文章がある行を空にする下書きは、確認を出せないので保存しない。下書きと編集はそのまま残す。
+    /// 空でない下書きは、今までどおり保存する。
     private func handleScenePhase(_ newPhase: ScenePhase) {
         guard newPhase == .background else {
             return
@@ -348,25 +417,86 @@ struct MonthlyLogPageView: View {
         guard let current = editingDateKey else {
             return
         }
+        if draftDeletesExistingLine(dateKey: current) {
+            return
+        }
         _ = saveDraft(dateKey: current)
     }
 
     /// 月が変わったら、編集中の行を確定してから読み直す。
+    ///
+    /// 文章がある行を空にする下書きは保存しない。元の文字に戻して、編集を閉じる。
+    /// 空でない下書きは、今までどおり保存する。
     private func handleMonthChange() {
         if let current = editingDateKey {
-            isMovingEdit = true
-            editFocusLanded = false
-            let saved = saveDraft(dateKey: current)
-            if saved {
-                editingDateKey = nil
-                draftText = ""
-                focusedDateKey = nil
+            if draftDeletesExistingLine(dateKey: current) {
+                cancelDelete(dateKey: current)
             } else {
-                editFocusLanded = true
+                isMovingEdit = true
+                editFocusLanded = false
+                let saved = saveDraft(dateKey: current)
+                if saved {
+                    editingDateKey = nil
+                    draftText = ""
+                    focusedDateKey = nil
+                } else {
+                    editFocusLanded = true
+                }
+                isMovingEdit = false
             }
-            isMovingEdit = false
         }
         reload()
+    }
+
+    /// 今の下書きを確定すると、保存してある文章が消えるとき true。
+    private func draftDeletesExistingLine(dateKey: String) -> Bool {
+        MonthlyLogEditRule.needsDeleteConfirmation(
+            original: textByDateKey[dateKey],
+            draft: draftText
+        )
+    }
+
+    /// 「消す」。空の文字でその日の行を消し、編集を閉じる。
+    /// 失敗したときは「保存できませんでした」を出し、入力を残す。
+    ///
+    /// 確認待ちは、保存が終わってから外す。外したあとのフォーカス変化で、もう一度保存しない。
+    private func confirmDelete(dateKey: String) {
+        let saved = deleteConfirmedLine(dateKey: dateKey)
+        if saved {
+            editingDateKey = nil
+            draftText = ""
+            focusedDateKey = nil
+            editFocusLanded = false
+            isMovingEdit = false
+        } else {
+            editFocusLanded = true
+            focusedDateKey = dateKey
+        }
+        pendingDeleteDateKey = nil
+    }
+
+    /// 「キャンセル」。元の文字に戻し、保存せずに編集を閉じる。記録は変えない。
+    private func cancelDelete(dateKey: String) {
+        draftText = textByDateKey[dateKey] ?? ""
+        editingDateKey = nil
+        focusedDateKey = nil
+        editFocusLanded = false
+        isMovingEdit = false
+        pendingDeleteDateKey = nil
+    }
+
+    /// 確認のあと、その日の行を空にして消す。下書きの文字は、ここでは変えない。
+    private func deleteConfirmedLine(dateKey: String) -> Bool {
+        let store = JournalStore(context: modelContext)
+        do {
+            try store.setLogLine(dateKey: dateKey, text: "")
+        } catch {
+            saveFailed = true
+            return false
+        }
+        saveFailed = false
+        reload()
+        return true
     }
 
     /// 下書きを保存する。入力の1文字ごとには呼ばない。

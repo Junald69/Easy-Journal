@@ -39,6 +39,46 @@ final class ScreenshotTests: XCTestCase {
         attachScreenshot(app, name: "04-monthly-edited")
     }
 
+    /// 文章がある行を空にして確定すると確認が出る。
+    /// キャンセルでは元の文字が残り、消すとその行が空になる。
+    func testMonthlyLogDeleteConfirmationRestoresOrClearsLine() {
+        let dateKey = "2026-10-24"
+        let original = "資料"
+        let app = launchMonthly()
+        waitForMonthlyLog(app)
+
+        let field = openMonthlyField(app, dateKey: dateKey)
+        deleteAllCharacters(in: field, knownText: original)
+        field.typeText(XCUIKeyboardKey.return.rawValue)
+
+        let alert = app.alerts["この行を消しますか？"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 10), "削除の確認が出ません")
+        let cancelButton = alert.buttons["キャンセル"]
+        let deleteButton = alert.buttons["消す"]
+        XCTAssertTrue(cancelButton.waitForExistence(timeout: 5), "キャンセルがありません")
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5), "消すがありません")
+        attachScreenshot(app, name: "05-monthly-delete-confirm")
+        cancelButton.tap()
+
+        waitUntilGone(alert, message: "確認が閉じません")
+        waitUntilTextShows(app, dateKey: dateKey, text: original)
+        assertMonthlyFieldClosed(app, dateKey: dateKey)
+
+        let fieldAgain = openMonthlyField(app, dateKey: dateKey)
+        deleteAllCharacters(in: fieldAgain, knownText: original)
+        fieldAgain.typeText(XCUIKeyboardKey.return.rawValue)
+
+        let alertAgain = app.alerts["この行を消しますか？"]
+        XCTAssertTrue(alertAgain.waitForExistence(timeout: 10), "もう一度、削除の確認が出ません")
+        let confirmButton = alertAgain.buttons["消す"]
+        XCTAssertTrue(confirmButton.waitForExistence(timeout: 5), "消すがありません")
+        confirmButton.tap()
+
+        waitUntilGone(alertAgain, message: "確認が閉じません")
+        waitUntilTextHides(app, dateKey: dateKey, text: original)
+        assertMonthlyFieldClosed(app, dateKey: dateKey)
+    }
+
     /// 文字を大きくしたときの月の画面。
     func testMonthlyLogLargeTextScreenshot() {
         let app = launchMonthly(extraArguments: [
@@ -116,8 +156,105 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(
             XCTWaiter().wait(for: [expectation], timeout: 10),
             .completed,
-            "27日の文章が入力した文字になっていません"
+            dateKey + " の文章が、期待した文字になっていません"
         )
+    }
+
+    /// 文章の部分を開き、編集欄を返す。隠れていたら、見えるまで少しずらす。
+    private func openMonthlyField(_ app: XCUIApplication, dateKey: String) -> XCUIElement {
+        tapMonthlyText(app, dateKey: dateKey)
+        let field = app.descendants(matching: .textField)["monthlyLogText-" + dateKey]
+        XCTAssertTrue(
+            field.waitForExistence(timeout: 10),
+            dateKey + " の編集欄がありません"
+        )
+        let hittable = NSPredicate(block: { evaluated, _ in
+            guard let editor = evaluated as? XCUIElement else {
+                return false
+            }
+            return editor.isHittable
+        })
+        let ready = XCTNSPredicateExpectation(predicate: hittable, object: field)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [ready], timeout: 5),
+            .completed,
+            dateKey + " の編集欄を押せません"
+        )
+        field.tap()
+        return field
+    }
+
+    /// 編集欄の文字を、末尾へ動かしてから1文字ずつ消す。空になったら終わる。
+    ///
+    /// カーソルが途中でも、右へ動かしてから消す。欄の値が見えないときは、分かっている文字数だけ消す。
+    private func deleteAllCharacters(in field: XCUIElement, knownText: String) {
+        var attempt = 0
+        while attempt < 4 {
+            let shown = field.value as? String ?? ""
+            if shown.isEmpty && attempt > 0 {
+                return
+            }
+            var deleteCount = shown.count
+            if deleteCount < knownText.count {
+                deleteCount = knownText.count
+            }
+            let endOfField = field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5))
+            endOfField.tap()
+            let moveToEnd = String(repeating: XCUIKeyboardKey.rightArrow.rawValue, count: deleteCount)
+            let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue, count: deleteCount)
+            field.typeText(moveToEnd + deletes)
+            attempt += 1
+        }
+        let leftover = field.value as? String ?? ""
+        XCTAssertEqual(leftover, "", "文章を全部消せませんでした")
+    }
+
+    /// 編集を閉じたあと、その日の文章に指定の文字が残っていないこと。
+    private func waitUntilTextHides(_ app: XCUIApplication, dateKey: String, text: String) {
+        let element = app.descendants(matching: .any)["monthlyLogText-" + dateKey]
+        let hidden = NSPredicate(block: { evaluated, _ in
+            guard let rowText = evaluated as? XCUIElement else {
+                return false
+            }
+            if rowText.exists == false {
+                return false
+            }
+            if rowText.label.contains(text) {
+                return false
+            }
+            if let value = rowText.value as? String, value.contains(text) {
+                return false
+            }
+            return true
+        })
+        let expectation = XCTNSPredicateExpectation(predicate: hidden, object: element)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [expectation], timeout: 10),
+            .completed,
+            dateKey + " の文章が残っています"
+        )
+    }
+
+    /// 確認のアラートが閉じるまで待つ。
+    private func waitUntilGone(_ element: XCUIElement, message: String) {
+        let gone = NSPredicate(block: { evaluated, _ in
+            guard let alert = evaluated as? XCUIElement else {
+                return false
+            }
+            return alert.exists == false
+        })
+        let expectation = XCTNSPredicateExpectation(predicate: gone, object: element)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [expectation], timeout: 10),
+            .completed,
+            message
+        )
+    }
+
+    /// その日が編集欄のままではないこと。
+    private func assertMonthlyFieldClosed(_ app: XCUIApplication, dateKey: String) {
+        let field = app.descendants(matching: .textField)["monthlyLogText-" + dateKey]
+        XCTAssertFalse(field.exists, dateKey + " が編集欄のままです")
     }
 
     /// 上の方を見せる。画面の真ん中から下へ滑らせる。
