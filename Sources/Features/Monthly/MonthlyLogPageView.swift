@@ -5,6 +5,7 @@ import SwiftUI
 ///
 /// 文章の部分だけ、その場で1行を編集できる。保存は `setLogLine` だけ。
 /// 文章がある行を空にして確定するときは、消す前に確認する。
+/// 編集を始めたときの文字は別に覚える。読み直しが失敗して表示が空でも、その文字で確認する。
 /// 日付の数字と曜日は、この画面では何もしない。
 /// 上のボタンは、まだ動かない。押しても何もしない。
 struct MonthlyLogPageView: View {
@@ -29,6 +30,8 @@ struct MonthlyLogPageView: View {
     @State private var editingDateKey: String? = nil
     /// 編集中の文章。読み直しでは消さない。
     @State private var draftText = ""
+    /// 編集を始めたときの元の文字。読み直しで textByDateKey が空になっても残す。
+    @State private var editSession = MonthlyLogEditSession()
     /// 別の行へ移している途中だけ true。
     ///
     /// 前の編集欄が消えると、フォーカスが一度空になる。
@@ -314,6 +317,9 @@ struct MonthlyLogPageView: View {
                 return
             }
         }
+        // 前の行の保存は、そのあと表示を読み直す。失敗すると textByDateKey が空になる。
+        // 開く行の元の文字は、その前に取っておく。
+        let nextOriginal = textByDateKey[dateKey]
         isMovingEdit = true
         editFocusLanded = false
         if let current = editingDateKey {
@@ -325,7 +331,8 @@ struct MonthlyLogPageView: View {
                 return
             }
         }
-        draftText = textByDateKey[dateKey] ?? ""
+        draftText = nextOriginal ?? ""
+        editSession.begin(original: nextOriginal)
         editingDateKey = dateKey
         focusedDateKey = dateKey
     }
@@ -351,6 +358,7 @@ struct MonthlyLogPageView: View {
             editingDateKey = nil
             draftText = ""
             focusedDateKey = nil
+            editSession.clear()
         } else {
             editFocusLanded = true
             focusedDateKey = current
@@ -399,6 +407,7 @@ struct MonthlyLogPageView: View {
             editingDateKey = nil
             draftText = ""
             editFocusLanded = false
+            editSession.clear()
         } else {
             focusedDateKey = previous
         }
@@ -439,6 +448,7 @@ struct MonthlyLogPageView: View {
                     editingDateKey = nil
                     draftText = ""
                     focusedDateKey = nil
+                    editSession.clear()
                 } else {
                     editFocusLanded = true
                 }
@@ -449,8 +459,14 @@ struct MonthlyLogPageView: View {
     }
 
     /// 今の下書きを確定すると、保存してある文章が消えるとき true。
+    ///
+    /// 編集中の行は、読み直しで消えない元の文字で判定する。
+    /// 読み込みに失敗して表示が空でも、元の文字があれば確認する。
     private func draftDeletesExistingLine(dateKey: String) -> Bool {
-        MonthlyLogEditRule.needsDeleteConfirmation(
+        if dateKey == editingDateKey {
+            return editSession.needsDeleteConfirmation(draft: draftText)
+        }
+        return MonthlyLogEditRule.needsDeleteConfirmation(
             original: textByDateKey[dateKey],
             draft: draftText
         )
@@ -468,6 +484,7 @@ struct MonthlyLogPageView: View {
             focusedDateKey = nil
             editFocusLanded = false
             isMovingEdit = false
+            editSession.clear()
         } else {
             editFocusLanded = true
             focusedDateKey = dateKey
@@ -476,13 +493,20 @@ struct MonthlyLogPageView: View {
     }
 
     /// 「キャンセル」。元の文字に戻し、保存せずに編集を閉じる。記録は変えない。
+    ///
+    /// 編集中の行は、読み直しで消えない元の文字に戻す。
     private func cancelDelete(dateKey: String) {
-        draftText = textByDateKey[dateKey] ?? ""
+        if dateKey == editingDateKey {
+            draftText = editSession.restoreText
+        } else {
+            draftText = textByDateKey[dateKey] ?? ""
+        }
         editingDateKey = nil
         focusedDateKey = nil
         editFocusLanded = false
         isMovingEdit = false
         pendingDeleteDateKey = nil
+        editSession.clear()
     }
 
     /// 確認のあと、その日の行を空にして消す。下書きの文字は、ここでは変えない。
@@ -502,7 +526,8 @@ struct MonthlyLogPageView: View {
     /// 下書きを保存する。入力の1文字ごとには呼ばない。
     ///
     /// 成功したら、編集中でない行の表示だけ読み直す。下書きはここでは消さない。
-    /// 失敗したら false。画面の文字は捨てない。
+    /// 記録は下書きの文字になるので、覚えていた元の文字もそれに合わせる。
+    /// 失敗したら false。画面の文字は捨てない。覚えていた元の文字も変えない。
     private func saveDraft(dateKey: String) -> Bool {
         let store = JournalStore(context: modelContext)
         do {
@@ -512,6 +537,7 @@ struct MonthlyLogPageView: View {
             return false
         }
         saveFailed = false
+        editSession.didSave(text: draftText)
         reload()
         return true
     }
