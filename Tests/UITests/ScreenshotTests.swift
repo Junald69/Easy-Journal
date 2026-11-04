@@ -48,7 +48,7 @@ final class ScreenshotTests: XCTestCase {
         waitForMonthlyLog(app)
 
         let field = openMonthlyField(app, dateKey: dateKey)
-        deleteAllCharacters(in: field, knownText: original)
+        deleteAllCharacters(in: field, knownText: original, app: app)
         field.typeText(XCUIKeyboardKey.return.rawValue)
 
         let alert = app.alerts["この行を消しますか？"]
@@ -65,7 +65,7 @@ final class ScreenshotTests: XCTestCase {
         assertMonthlyFieldClosed(app, dateKey: dateKey)
 
         let fieldAgain = openMonthlyField(app, dateKey: dateKey)
-        deleteAllCharacters(in: fieldAgain, knownText: original)
+        deleteAllCharacters(in: fieldAgain, knownText: original, app: app)
         fieldAgain.typeText(XCUIKeyboardKey.return.rawValue)
 
         let alertAgain = app.alerts["この行を消しますか？"]
@@ -184,10 +184,15 @@ final class ScreenshotTests: XCTestCase {
         return field
     }
 
-    /// 編集欄の文字を、末尾へ動かしてから1文字ずつ消す。空になったら終わる。
+    /// 編集欄の文字を、末尾から delete キーだけで消す。空になったら終わる。
     ///
-    /// カーソルが途中でも、右へ動かしてから消す。欄の値が見えないときは、分かっている文字数だけ消す。
-    private func deleteAllCharacters(in field: XCUIElement, knownText: String) {
+    /// ソフトウェアキーボードに矢印キーはない。右端をタップしてカーソルを末尾に置く。
+    /// 残ったときは、編集メニューの「すべてを選択」から1回だけ消す。
+    private func deleteAllCharacters(
+        in field: XCUIElement,
+        knownText: String,
+        app: XCUIApplication
+    ) {
         var attempt = 0
         while attempt < 4 {
             let shown = field.value as? String ?? ""
@@ -198,15 +203,50 @@ final class ScreenshotTests: XCTestCase {
             if deleteCount < knownText.count {
                 deleteCount = knownText.count
             }
+            deleteCount += 2
             let endOfField = field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5))
             endOfField.tap()
-            let moveToEnd = String(repeating: XCUIKeyboardKey.rightArrow.rawValue, count: deleteCount)
             let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue, count: deleteCount)
-            field.typeText(moveToEnd + deletes)
+            field.typeText(deletes)
             attempt += 1
+        }
+        let afterDeletes = field.value as? String ?? ""
+        if afterDeletes.isEmpty == false {
+            selectAllThenDelete(in: field, app: app)
         }
         let leftover = field.value as? String ?? ""
         XCTAssertEqual(leftover, "", "文章を全部消せませんでした")
+    }
+
+    /// 長押しの編集メニューで全文を選んでから、delete を1回送る。
+    ///
+    /// 「Select All」も「すべてを選択」も無いときは、何もしない。
+    private func selectAllThenDelete(in field: XCUIElement, app: XCUIApplication) {
+        field.press(forDuration: 1.0)
+        let english = app.menuItems["Select All"]
+        let japanese = app.menuItems["すべてを選択"]
+        let appeared = NSPredicate(block: { _, _ in
+            if english.exists {
+                return true
+            }
+            if japanese.exists {
+                return true
+            }
+            return false
+        })
+        let ready = XCTNSPredicateExpectation(predicate: appeared, object: app)
+        let result = XCTWaiter().wait(for: [ready], timeout: 2)
+        if result != .completed {
+            return
+        }
+        if english.exists {
+            english.tap()
+        } else if japanese.exists {
+            japanese.tap()
+        } else {
+            return
+        }
+        field.typeText(XCUIKeyboardKey.delete.rawValue)
     }
 
     /// 編集を閉じたあと、その日の文章に指定の文字が残っていないこと。
