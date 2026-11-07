@@ -14,6 +14,48 @@ final class ScreenshotTests: XCTestCase {
         attachScreenshot(app, name: "02-monthly-top")
     }
 
+    /// タスクを3つ足して □ ◧ ■ を並べ、削除の確認をキャンセルと消すで見る。
+    ///
+    /// アラートとボタンは firstMatch。押す前に isHittable を待つ。
+    /// キーボードの rightArrow は使わない。確定は「追加」ボタン。
+    func testMonthlyTaskScreenshotAndDelete() {
+        let app = launchMonthly(extraArguments: [], includeSampleData: false)
+        waitForMonthlyLog(app)
+
+        addTask("Cards", in: app)
+        addTask("Tidy", in: app)
+        cycleTask(title: "Tidy", from: "未完", to: "一部", in: app)
+        addTask("Insurance", in: app)
+        cycleTask(title: "Insurance", from: "未完", to: "一部", in: app)
+        cycleTask(title: "Insurance", from: "一部", to: "完了", in: app)
+
+        let open = taskButton("未完 Cards", in: app)
+        let partial = taskButton("一部 Tidy", in: app)
+        let done = taskButton("完了 Insurance", in: app)
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "未完 Cards がありません")
+        XCTAssertTrue(partial.waitForExistence(timeout: 5), "一部 Tidy がありません")
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "完了 Insurance がありません")
+        reveal(done, in: app)
+        waitUntilHittable(done)
+        attachScreenshot(app, name: "06-monthly-task")
+
+        longPressTitle("Insurance", in: app)
+        tapDeleteMenu(in: app)
+        tapAlertButton("キャンセル", in: app)
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "キャンセル後にタスクが消えました")
+        XCTAssertTrue(open.exists, "キャンセル後に Cards がありません")
+        XCTAssertTrue(partial.exists, "キャンセル後に Tidy がありません")
+
+        longPressTitle("Insurance", in: app)
+        tapDeleteMenu(in: app)
+        tapAlertButton("消す", in: app)
+        let gone = NSPredicate(format: "exists == false")
+        let expectation = XCTNSPredicateExpectation(predicate: gone, object: done)
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation], timeout: 5), .completed)
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "消したあとに Cards がありません")
+        XCTAssertTrue(partial.waitForExistence(timeout: 5), "消したあとに Tidy がありません")
+    }
+
     /// 文字を大きくしたときの月の画面。
     func testMonthlyLogLargeTextScreenshot() {
         let app = launchMonthly(extraArguments: [
@@ -24,16 +66,22 @@ final class ScreenshotTests: XCTestCase {
         attachScreenshot(app, name: "03-monthly-large-text")
     }
 
-    private func launchMonthly(extraArguments: [String] = []) -> XCUIApplication {
+    private func launchMonthly(
+        extraArguments: [String] = [],
+        includeSampleData: Bool = true
+    ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-sampleData",
+        var arguments = [
             "-inMemoryStore",
             "-openPage",
             "monthly:2026-10",
             "-todayKey",
             "2026-10-27",
-        ] + extraArguments
+        ]
+        if includeSampleData {
+            arguments.insert("-sampleData", at: 0)
+        }
+        app.launchArguments = arguments + extraArguments
         app.launch()
         return app
     }
@@ -64,6 +112,108 @@ final class ScreenshotTests: XCTestCase {
             app.swipeDown()
             attempt += 1
         }
+    }
+
+    private func addTask(_ title: String, in app: XCUIApplication) {
+        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        reveal(addButton, in: app)
+        tapWhenHittable(addButton)
+        let field = app.textFields["monthlyTaskTitleField"].firstMatch
+        tapWhenHittable(field)
+        field.typeText(title)
+        let confirm = app.descendants(matching: .any)["monthlyTaskConfirmButton"].firstMatch
+        reveal(confirm, in: app)
+        if confirm.isHittable {
+            tapWhenHittable(confirm)
+        } else if field.isHittable {
+            field.typeText("\n")
+        } else {
+            tapWhenHittable(confirm)
+        }
+        let created = taskButton("未完 " + title, in: app)
+        XCTAssertTrue(created.waitForExistence(timeout: 5), "追加後の未完が見つかりません: " + title)
+    }
+
+    private func cycleTask(title: String, from: String, to: String, in app: XCUIApplication) {
+        let current = taskButton(from + " " + title, in: app)
+        reveal(current, in: app)
+        tapWhenHittable(current)
+        let updated = taskButton(to + " " + title, in: app)
+        XCTAssertTrue(updated.waitForExistence(timeout: 5), to + " " + title)
+    }
+
+    private func taskButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    private func longPressTitle(_ title: String, in app: XCUIApplication) {
+        let identified = app.descendants(matching: .any)["monthlyTaskLabel-" + title].firstMatch
+        let target: XCUIElement
+        if identified.waitForExistence(timeout: 2) {
+            target = identified
+        } else {
+            target = app.staticTexts[title].firstMatch
+        }
+        reveal(target, in: app)
+        if waitUntilHittable(target) {
+            target.press(forDuration: 1.2)
+        }
+    }
+
+    private func tapDeleteMenu(in app: XCUIApplication) {
+        let identified = app.descendants(matching: .any)["monthlyTaskDeleteAction"].firstMatch
+        if identified.waitForExistence(timeout: 3) {
+            tapWhenHittable(identified)
+            return
+        }
+        let labeled = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", "削除")
+        ).firstMatch
+        XCTAssertTrue(labeled.waitForExistence(timeout: 3), "削除のメニューがありません")
+        tapWhenHittable(labeled)
+    }
+
+    private func tapAlertButton(_ title: String, in app: XCUIApplication) {
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "確認のアラートがありません")
+        let button = alert.buttons[title].firstMatch
+        tapWhenHittable(button)
+    }
+
+    /// 画面の外なら、上へ滑らせて見えるようにする。見えているときは滑らせない。
+    ///
+    /// すぐには滑らせない。アニメーションで押せるようになるのを、先に少し待つ。
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication, attempts: Int = 8) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5), "要素がありません")
+        var attempt = 0
+        while element.isHittable == false && attempt < attempts {
+            let ready = NSPredicate(format: "isHittable == true")
+            let expectation = XCTNSPredicateExpectation(predicate: ready, object: element)
+            if XCTWaiter().wait(for: [expectation], timeout: 1) == .completed {
+                return
+            }
+            app.swipeUp()
+            attempt += 1
+        }
+    }
+
+    /// 押せるようになるまで待ってからタップする。待てなければ押さない。
+    private func tapWhenHittable(_ element: XCUIElement, timeout: TimeInterval = 8) {
+        let ready = waitUntilHittable(element, timeout: timeout)
+        if ready == false {
+            return
+        }
+        element.tap()
+    }
+
+    @discardableResult
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 8) -> Bool {
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), "要素がありません")
+        let ready = NSPredicate(format: "isHittable == true")
+        let expectation = XCTNSPredicateExpectation(predicate: ready, object: element)
+        let result = XCTWaiter().wait(for: [expectation], timeout: timeout)
+        XCTAssertEqual(result, .completed)
+        return result == .completed
     }
 
     private func attachScreenshot(_ app: XCUIApplication, name: String) {
