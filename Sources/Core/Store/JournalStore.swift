@@ -132,23 +132,23 @@ final class JournalStore {
         return try context.fetch(descriptor)
     }
 
-    /// 月の読み出し専用。Core の中でだけ使う。画面から直接は呼ばない。
+    /// その月の、種類が daily（その日のページ）の目次カードだけ取る。
     ///
-    /// 読むだけ。何も作らない・保存しない。全件を返す。
-    /// ここから先の記録が増えたときは、月で絞る読み方に変える。
+    /// 月の読み出しは別ファイルにある。`context`（読み書きの窓口）は private なので、
+    /// あちらからは取れない。この関数だけが、月で絞った取り方を渡す。
+    /// 画面からは呼ばない。何も作らない・保存しない。全件は返さない。
     ///
-    /// `context`（読み書きの窓口）は private なので、別ファイルの月の読み出しからは取れない。
-    /// 検索条件（`#Predicate`）は付けない。空を許す日付（String?）を検索条件に入れないため。
-    ///
-    /// 引数は、取り出す型を指定するためにある。呼び出し側は `Page.self` のように渡す。
-    /// これは中の `Model.self` と同じ型を指す。引数を消すと、Swift がどのモデルか推論できない。
-    /// 全件を返すので、この値では絞り込まない。
-    func storedModels<Model: PersistentModel>(_ modelType: Model.Type) throws -> [Model] {
-        let stored = try context.fetch(FetchDescriptor<Model>())
-        if modelType == Model.self {
-            return stored
-        }
-        return stored
+    /// 検索条件（`#Predicate`）は、種類（kindRaw）と月（monthKey）だけ。
+    /// どちらも空を許さない文字列。空を許す日付（dateKey の String?）は入れない。
+    func dailyPages(inMonth monthKey: String) throws -> [Page] {
+        let dailyKindRaw = PageKind.daily.rawValue
+        let monthText = monthKey
+        let descriptor = FetchDescriptor<Page>(
+            predicate: #Predicate { page in
+                page.kindRaw == dailyKindRaw && page.monthKey == monthText
+            }
+        )
+        return try context.fetch(descriptor)
     }
 
     /// その日の目次カード。複数あれば、中身があるものの中で一番古いもの。無ければ nil。
@@ -326,6 +326,18 @@ enum JournalStoreError: Error, Equatable {
 // MARK: - 日ごとの記録
 
 extension JournalStore {
+    /// 保存してある1行を全部取る。`logLine` が見る候補と同じ。
+    ///
+    /// 月の画面は、選ばれた1つの月ページの行だけではなく、ここから同じ日を選ぶ。
+    /// 別の月ページについている行や、月ページにつながっていない行も入る。
+    /// 画面からは呼ばない。何も作らない・保存しない。
+    ///
+    /// `dateKey` は空を許さない文字列。`starts(with:)` を検索条件（`#Predicate`）に入れて
+    /// 月で絞れるかは未確認なので、ここでは条件を付けない。月の絞りは呼び出し側が Swift で行う。
+    func storedLogLines() throws -> [MonthlyLogLine] {
+        try context.fetch(FetchDescriptor<MonthlyLogLine>())
+    }
+
     /// その日の1行。無ければ nil。
     ///
     /// 同じ日が複数あるときは、更新時刻が一番新しいもの。同時刻なら id の文字順が大きい方。
