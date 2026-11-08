@@ -1,6 +1,16 @@
 import SwiftData
 import SwiftUI
 
+/// 月の左ページで、どの入力欄にフォーカスがあるか。
+///
+/// 1行とタスクの名前は、別の値にする。名前欄へ移っただけでは、1行の保存や確認は出さない。
+enum MonthlyEditorFocus: Hashable {
+    /// その日の1行。
+    case log(String)
+    /// 月のタスクの名前。
+    case taskTitle
+}
+
 /// 月の左ページに出す、1件の Monthly Task。画面の中だけで使う。
 struct MonthlyTaskItem: Identifiable, Equatable {
     let id: UUID
@@ -51,8 +61,12 @@ struct MonthlyTaskSection: View {
     let interactionsEnabled: Bool
     @Binding var isAdding: Bool
     @Binding var draftTitle: String
-    /// 保存に失敗したときの一文。無いときは nil。赤にはしない。
-    let saveNotice: String?
+    var editorFocus: FocusState<MonthlyEditorFocus>.Binding
+    /// 1行を編集中なら true。名前欄は、そのあいだ直接フォーカスを取らない。
+    let logEditActive: Bool
+    let onBeginAdd: () -> Void
+    /// 編集中に名前欄を押したとき。確定してからフォーカスを移す。
+    let onActivateComposer: () -> Void
     let onConfirm: () -> Void
     let onCycle: (UUID) -> Void
     let onRequestDelete: (MonthlyTaskItem) -> Void
@@ -71,15 +85,6 @@ struct MonthlyTaskSection: View {
                     onRequestDelete: { onRequestDelete(item) }
                 )
             }
-            if let saveNotice {
-                Text(saveNotice)
-                    .font(DesignTokens.Fonts.subText)
-                    .foregroundStyle(DesignTokens.inkSub)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, DesignTokens.Spacing.l)
-                    .padding(.bottom, DesignTokens.Spacing.s)
-                    .accessibilityIdentifier("monthlyTaskSaveNotice")
-            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("monthlyTaskSection")
@@ -93,7 +98,7 @@ struct MonthlyTaskSection: View {
                 .accessibilityLabel("月のタスク")
             Spacer(minLength: DesignTokens.Spacing.s)
             if interactionsEnabled {
-                Button(action: { isAdding = true }) {
+                Button(action: onBeginAdd) {
                     Text("＋")
                         .font(DesignTokens.Fonts.bodyText)
                         .foregroundStyle(DesignTokens.accent)
@@ -110,19 +115,34 @@ struct MonthlyTaskSection: View {
     }
 
     private var composer: some View {
-        HStack(spacing: DesignTokens.Spacing.s) {
-            TextField("タスク", text: $draftTitle)
-                .font(DesignTokens.Fonts.bodyText)
-                .foregroundStyle(DesignTokens.ink)
-                .textFieldStyle(.plain)
-                .submitLabel(.done)
-                .onSubmit { onConfirm() }
-                .accessibilityIdentifier("monthlyTaskTitleField")
-            Button("追加", action: onConfirm)
-                .buttonStyle(.bordered)
-                .tint(DesignTokens.accent)
-                .disabled(interactionsEnabled == false)
-                .accessibilityIdentifier("monthlyTaskConfirmButton")
+        ZStack(alignment: .leading) {
+            HStack(spacing: DesignTokens.Spacing.s) {
+                TextField("タスク", text: $draftTitle)
+                    .font(DesignTokens.Fonts.bodyText)
+                    .foregroundStyle(DesignTokens.ink)
+                    .textFieldStyle(.plain)
+                    .submitLabel(.done)
+                    .focused(editorFocus, equals: .taskTitle)
+                    .disabled(logEditActive)
+                    .onSubmit { onConfirm() }
+                    .onAppear {
+                        if logEditActive == false {
+                            editorFocus.wrappedValue = .taskTitle
+                        }
+                    }
+                    .accessibilityIdentifier("monthlyTaskTitleField")
+                Button("追加", action: onConfirm)
+                    .buttonStyle(.bordered)
+                    .tint(DesignTokens.accent)
+                    .disabled(interactionsEnabled == false)
+                    .accessibilityIdentifier("monthlyTaskConfirmButton")
+            }
+            if logEditActive {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onActivateComposer)
+                    .accessibilityIdentifier("monthlyTaskComposerGuard")
+            }
         }
         .padding(.horizontal, DesignTokens.Spacing.l)
         .padding(.bottom, DesignTokens.Spacing.s)
