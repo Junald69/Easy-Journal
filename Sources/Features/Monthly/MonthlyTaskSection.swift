@@ -61,7 +61,7 @@ struct MonthlyTaskSection: View {
     let interactionsEnabled: Bool
     @Binding var isAdding: Bool
     @Binding var draftTitle: String
-    var editorFocus: FocusState<MonthlyEditorFocus>.Binding
+    var editorFocus: FocusState<MonthlyEditorFocus?>.Binding
     /// 1行を編集中なら true。名前欄は、そのあいだ直接フォーカスを取らない。
     let logEditActive: Bool
     let onBeginAdd: () -> Void
