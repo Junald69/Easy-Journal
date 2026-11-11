@@ -101,16 +101,25 @@ final class Router {
 
     /// 月の画面が、確認と保存と読み込みのあとにだけ呼ぶ。
     ///
-    /// ここだけが、出ている月の画面の表示月を変える。`open` を、ガードを外してから呼ぶ。
-    /// 月キーとして読めないときは、表示月も依頼も変えない。
-    func commitDisplayedMonth(_ monthKey: String) {
+    /// `authorization` は、その移動が成功したときだけ作れる。無い値では表示月は変えない。
+    /// 起動時と `-openPage` は、ここを通さず `open` を使う。
+    /// 月キーとして読めないときも、表示月は変えない。
+    func commitDisplayedMonth(
+        _ monthKey: String,
+        authorization: MonthMoveAuthorization
+    ) {
+        guard authorization.isAccepted else {
+            return
+        }
         guard DateKey.isValidMonthKey(monthKey) else {
             return
         }
         let wasGuarding = guardsMonthlyNavigation
         guardsMonthlyNavigation = false
+        defer {
+            guardsMonthlyNavigation = wasGuarding
+        }
         open(.monthlyLog(monthKey: monthKey))
-        guardsMonthlyNavigation = wasGuarding
     }
 
     /// 月の画面が出ていて、別の月の記録を開こうとしているとき、その月キー。それ以外は nil。

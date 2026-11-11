@@ -22,7 +22,9 @@ struct MonthlyLogPageView: View {
     /// 今日の日付キー（`yyyy-MM-dd`）。帯とスクロールに使う。
     let todayKey: String
     /// 移れたときだけ呼ぶ。保存と読み込みが成功したあとで、Router の月を変える。
-    let openMonth: (String) -> Void
+    ///
+    /// 2つ目の値は、この移動が成功したときだけ作る。画面の外では作れない。
+    let openMonth: (String, MonthMoveAuthorization) -> Void
     /// 外から「この月を開いて」と頼まれた印。無いときは nil。表示月は、これだけでは変えない。
     var monthRequest: MonthNavigationRequest? = nil
     /// 依頼を見た。成功でも失敗でも、同じ依頼ではもう一度動かさない。
@@ -81,8 +83,12 @@ struct MonthlyLogPageView: View {
     /// タスク欄で月を止めているあいだ、および焦点を一言日記へ戻しているあいだ true。
     ///
     /// このあいだ焦点が外れても、編集欄は閉じない。下書きの文字も捨てない。
-    /// 保存が走っても、行は編集のまま残す。
+    /// 日記を閉じたとき、止めを解いたときは false に戻す。戻さないと、次の日記が保存されない。
     @State private var holdLogEditor = false
+    /// 月の移動が、空の行を消す確認を出したとき true。焦点が外れた確認とは分ける。
+    @State private var deleteConfirmFromMonthMove = false
+    /// 確認が出ているあいだに月の依頼が来たとき true。黙って捨てない。
+    @State private var monthMoveBlockedByOpenConfirm = false
     /// 移動の準備で出た失敗。成功したら `none`。保存と読み込みは同時には出さない。
     @State private var moveProblem: MonthMoveRule.MoveProblem = .none
     /// 新しい失敗と、前の失敗を区別するための番号。成功では増やさない。
@@ -149,6 +155,21 @@ struct MonthlyLogPageView: View {
                         .padding(DesignTokens.Spacing.s)
                         .accessibilityIdentifier("monthlySaveError")
                 }
+                if monthMoveBlockedByOpenConfirm {
+                    Text("確認を終えてから月を移動してください")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(DesignTokens.Spacing.s)
+                        .accessibilityIdentifier("monthlyMoveBlockedByConfirm")
+                }
+                if deleteConfirmFromMonthMove && pendingDeleteDateKey != nil {
+                    Text("月の移動の確認")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .opacity(0.01)
+                        .accessibilityIdentifier("monthlyLogDeleteFromMonthMove")
+                }
                 if showsTaskDraftBlockMessage {
                     Text(MonthMoveRule.taskDraftBlockMessage)
                         .font(DesignTokens.Fonts.subText)
@@ -171,8 +192,25 @@ struct MonthlyLogPageView: View {
         .onAppear {
             reload()
         }
-        .onChange(of: monthRequest) { _, request in
+        .onChange(of: monthRequest, initial: true) { _, request in
             handleMonthRequest(request)
+        }
+        .onChange(of: editingDateKey) { _, newKey in
+            if newKey == nil {
+                holdLogEditor = false
+                restoreLogFocusDateKey = nil
+            }
+        }
+        .onChange(of: taskDraftMoveBlocked) { _, blocked in
+            if blocked == false, restoreLogFocusDateKey == nil {
+                holdLogEditor = false
+            }
+        }
+        .onChange(of: pendingDeleteDateKey) { _, newValue in
+            if newValue == nil {
+                deleteConfirmFromMonthMove = false
+                monthMoveBlockedByOpenConfirm = false
+            }
         }
         .onChange(of: taskDraftTitle) { _, newTitle in
             guard MonthMoveRule.hasUncommittedTaskDraft(newTitle) == false else {
@@ -189,12 +227,16 @@ struct MonthlyLogPageView: View {
             restoreLogFocusDateKey = current
             let dateKey = current
             // 名前欄が無効になるのと同じ更新で焦点を移すと、無効な欄に残る。
-            // 更新のあと、この画面だけが一言日記へ戻す。
+            // 1回だけ戻す。乗らなかったときに繰り返すと、画面が止まらなくなる。
             DispatchQueue.main.async {
                 guard restoreLogFocusDateKey == dateKey else {
                     return
                 }
                 editorFocus = .log(dateKey)
+                restoreLogFocusDateKey = nil
+                if taskDraftMoveBlocked == false {
+                    holdLogEditor = false
+                }
             }
         }
         .onChange(of: moveFailureToken) { _, _ in
@@ -401,7 +443,11 @@ struct MonthlyLogPageView: View {
             }
         }
         if todayIsInThisMonth {
-            proxy.scrollTo(todayKey, anchor: .center)
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(todayKey, anchor: .center)
+            }
         }
     }
 
@@ -449,7 +495,13 @@ struct MonthlyLogPageView: View {
                     commitAndClose()
                 }
                 .onAppear {
-                    editorFocus = .log(row.dateKey)
+                    // タスク欄へ焦点を移しているあいだは、ここが奪い返さない。
+                    if taskDraftMoveBlocked {
+                        return
+                    }
+                    if editorFocus != .log(row.dateKey) {
+                        editorFocus = .log(row.dateKey)
+                    }
                 }
                 .frame(maxWidth: .infinity, minHeight: DesignTokens.gridSize, alignment: .leading)
                 .overlay(alignment: .bottom) {
@@ -557,26 +609,12 @@ struct MonthlyLogPageView: View {
     /// タスクの名前欄へ移ったときは、ここでは保存も確認も出さない。
     /// 文章がある行を空にするときは、保存せず確認を出す。
     private func handleFocusChange(oldFocus: MonthlyEditorFocus?, newFocus: MonthlyEditorFocus?) {
-        if let dateKey = restoreLogFocusDateKey {
-            if newFocus == .log(dateKey) {
+        if restoreLogFocusDateKey != nil {
+            // 戻すあいだの空振りでは保存しない。焦点の入れ直しは、上の1回だけ。
+            if let dateKey = restoreLogFocusDateKey, newFocus == .log(dateKey) {
                 editFocusLanded = true
                 isMovingEdit = false
-                // 乗った直後の空振りでは閉じない。乗ったままなら、次の更新で保護を外す。
-                DispatchQueue.main.async {
-                    guard restoreLogFocusDateKey == dateKey else {
-                        return
-                    }
-                    if editorFocus == .log(dateKey) {
-                        restoreLogFocusDateKey = nil
-                        holdLogEditor = false
-                    } else {
-                        editorFocus = .log(dateKey)
-                    }
-                }
-                return
             }
-            // 名前を空にしたあと、無効な欄に残った焦点は一言日記へ戻す。保存はしない。
-            editorFocus = .log(dateKey)
             return
         }
         if holdLogEditor || taskDraftMoveBlocked {
@@ -633,11 +671,6 @@ struct MonthlyLogPageView: View {
             return
         }
         let saved = saveDraft(dateKey: previous)
-        if holdLogEditor || taskDraftMoveBlocked {
-            // タスク欄で止めているあいだに保存されても、編集は閉じない。文字も残す。
-            editorFocus = .log(previous)
-            return
-        }
         if saved {
             editingDateKey = nil
             draftText = ""
@@ -685,7 +718,17 @@ struct MonthlyLogPageView: View {
         guard let request else {
             return
         }
+        if request.monthKey == displayedMonthKey {
+            acknowledgeMonthRequest()
+            return
+        }
         acknowledgeMonthRequest()
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
+            // 確認が出ている。依頼は見たので繰り返さない。黙っては捨てない。
+            deleteConfirmFromMonthMove = pendingDeleteDateKey != nil
+            monthMoveBlockedByOpenConfirm = true
+            return
+        }
         move(to: request.monthKey)
     }
 
@@ -721,6 +764,7 @@ struct MonthlyLogPageView: View {
         switch before {
         case .confirmDelete:
             if let current = editingDateKey {
+                deleteConfirmFromMonthMove = true
                 pendingDeleteDateKey = current
             }
             return
@@ -858,7 +902,17 @@ struct MonthlyLogPageView: View {
         loadFailed = false
         saveFailed = false
         moveProblem = .none
-        openMonth(destination)
+        let authorization = MonthMoveAuthorization.forSuccessfulMove()
+        let commitMonth = openMonth
+        // 焦点を外したあとに月の入れ物を作り直す。同じ更新で行うと、
+        // キーボードを閉じる動きが終わらず、次の操作が長時間待つ。
+        DispatchQueue.main.async {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                commitMonth(destination, authorization)
+            }
+        }
     }
 
     /// 移れたときだけ捨てる、月ごとの編集状態。
@@ -876,6 +930,8 @@ struct MonthlyLogPageView: View {
         taskDraftMoveBlocked = false
         restoreLogFocusDateKey = nil
         holdLogEditor = false
+        deleteConfirmFromMonthMove = false
+        monthMoveBlockedByOpenConfirm = false
         taskDraftBlockFocused = false
     }
 
@@ -1099,6 +1155,8 @@ struct MonthlyLogPageView: View {
             _ = try store.addMonthlyTask(monthKey: displayedMonthKey, title: taskDraftTitle)
             taskDraftTitle = ""
             taskDraftMoveBlocked = false
+            holdLogEditor = false
+            restoreLogFocusDateKey = nil
             isAddingTask = false
             editorFocus = nil
             saveFailed = false
@@ -1239,6 +1297,31 @@ struct MonthlyLogPageView: View {
             parts.append(row.text)
         }
         return parts.joined(separator: " ")
+    }
+}
+
+/// 月の移動が成功したときだけ作れる値。これがない `commitDisplayedMonth` は、表示月を変えない。
+///
+/// 作れるのは、このファイルの移動処理だけ。画面の外は `rejected` しか持てない。
+struct MonthMoveAuthorization: Equatable {
+    private let nonce: UUID
+
+    private init(nonce: UUID) {
+        self.nonce = nonce
+    }
+
+    /// 確認と保存と読み込みが終わった移動だけが呼ぶ。
+    fileprivate static func forSuccessfulMove() -> MonthMoveAuthorization {
+        MonthMoveAuthorization(nonce: UUID())
+    }
+
+    /// 承諾には使えない。画面の外から渡しても、月は変わらない。
+    static let rejected = MonthMoveAuthorization(
+        nonce: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    )
+
+    var isAccepted: Bool {
+        nonce != MonthMoveAuthorization.rejected.nonce
     }
 }
 

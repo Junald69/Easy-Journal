@@ -173,13 +173,32 @@ final class RouterTests: XCTestCase {
         XCTAssertNotEqual(router.monthRequest?.token, firstToken)
         XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
 
-        router.commitDisplayedMonth("2026-13")
+        router.commitDisplayedMonth("2026-13", authorization: .rejected)
         XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
         XCTAssertEqual(router.monthRequest?.monthKey, "2027-01")
 
-        router.commitDisplayedMonth("2027-01")
-        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2027-01"))
-        XCTAssertNil(router.monthRequest)
+        router.commitDisplayedMonth("2027-01", authorization: .rejected)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2027-01")
+    }
+
+    /// 画面の外の承諾では、ガードの前後どちらでも月は変わらない。
+    /// 画面が出る前の依頼は、表示月を変えずに残る。画面が現れてから片付ける。
+    func testOutsideCommitDoesNotChangeTheMonth() throws {
+        let router = try octoberRouter()
+        router.requestMonth("2026-12")
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-12")
+
+        router.commitDisplayedMonth("2026-11", authorization: .rejected)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-12")
+
+        router.beginGuardingMonthlyNavigation()
+        router.commitDisplayedMonth("2026-11", authorization: .rejected)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-12")
+        XCTAssertFalse(MonthMoveAuthorization.rejected.isAccepted)
     }
 
     /// 月の画面が出ているあいだ、別の月への open は依頼になる。表示月は変えない。
@@ -197,12 +216,12 @@ final class RouterTests: XCTestCase {
 
         router.open(.monthlyLog(monthKey: "2026-10"))
         router.beginGuardingMonthlyNavigation()
-        router.commitDisplayedMonth("2026-12")
-        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-12"))
+        router.commitDisplayedMonth("2026-12", authorization: .rejected)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
         XCTAssertNil(router.monthRequest)
 
         router.open(.monthlyLog(monthKey: "2026-11"))
-        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-12"))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
         XCTAssertEqual(router.monthRequest?.monthKey, "2026-11")
 
         router.endGuardingMonthlyNavigation()

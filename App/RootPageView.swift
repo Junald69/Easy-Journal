@@ -33,8 +33,8 @@ struct RootPageView: View {
             MonthlyLogPageView(
                 monthKey: monthKey,
                 todayKey: todayKey,
-                openMonth: { destination in
-                    router.commitDisplayedMonth(destination)
+                openMonth: { destination, authorization in
+                    router.commitDisplayedMonth(destination, authorization: authorization)
                 },
                 monthRequest: router.monthRequest,
                 acknowledgeMonthRequest: {

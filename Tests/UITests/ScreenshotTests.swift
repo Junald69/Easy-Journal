@@ -586,6 +586,12 @@ final class ScreenshotTests: XCTestCase {
         let field = openMonthlyField(app, dateKey: dateKey)
         deleteAllCharacters(in: field, knownText: "資料", app: app)
         let alert = waitForExternalDeleteAlert(in: app)
+        let fromMove = app.descendants(matching: .any)["monthlyLogDeleteFromMonthMove"]
+        let blocked = app.descendants(matching: .any)["monthlyMoveBlockedByConfirm"]
+        XCTAssertTrue(
+            fromMove.exists || blocked.exists,
+            "確認が、月の移動からなのか、焦点が外れたからなのか分かりません"
+        )
         let cancel = alert.buttons["キャンセル"].firstMatch
         waitUntilHittable(cancel, message: "キャンセルを押せません")
         cancel.tap()
@@ -601,6 +607,12 @@ final class ScreenshotTests: XCTestCase {
         let fieldAgain = openMonthlyField(app, dateKey: dateKey)
         deleteAllCharacters(in: fieldAgain, knownText: "資料", app: app)
         let alertAgain = waitForExternalDeleteAlert(in: app)
+        let fromMoveAgain = app.descendants(matching: .any)["monthlyLogDeleteFromMonthMove"]
+        let blockedAgain = app.descendants(matching: .any)["monthlyMoveBlockedByConfirm"]
+        XCTAssertTrue(
+            fromMoveAgain.exists || blockedAgain.exists,
+            "2回目の確認の出どころが分かりません"
+        )
         let confirm = alertAgain.buttons["消す"].firstMatch
         waitUntilHittable(confirm, message: "消すを押せません")
         confirm.tap()
@@ -661,6 +673,56 @@ final class ScreenshotTests: XCTestCase {
         logField.typeText("Z")
         let resumed = logField.value as? String ?? ""
         XCTAssertTrue(resumed.contains("FocusLogZ"), "焦点を戻した欄に書けません: " + resumed)
+        waitForMonthTitle("2026年 10月", in: app)
+    }
+
+    /// タスク欄で止めたあとタスクを追加したら、次の日記は焦点が外れたときに保存して閉じる。
+    func testAfterTaskBlockAddingTaskRestoresFocusLossSave() {
+        let app = launchMonthly(includeSampleData: false)
+        waitForMonthlyLog(app)
+
+        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        revealMonthlyTask(addButton, in: app)
+        waitUntilHittable(addButton, message: "タスクの追加を押せません")
+        addButton.tap()
+        let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
+        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
+        taskField.tap()
+        taskField.typeText("HoldTask")
+
+        let first = openMonthlyField(app, dateKey: "2026-10-26")
+        first.typeText("StayOpen")
+        tapMonthButton("monthlyNextButton", in: app)
+        tapMonthButton("monthlyNextButton", in: app)
+        let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
+
+        let confirm = app.descendants(matching: .any)["monthlyTaskConfirmButton"].firstMatch
+        revealMonthlyTask(confirm, in: app)
+        waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
+        confirm.tap()
+        XCTAssertTrue(
+            monthlyTaskButton("未完 HoldTask", in: app).waitForExistence(timeout: 5),
+            "止めたあとのタスクが追加されません"
+        )
+        let closedFirst = app.descendants(matching: .textField)["monthlyLogText-2026-10-26"]
+        XCTAssertFalse(closedFirst.exists, "タスクを追加したあとも、最初の日記が編集のままです")
+
+        let second = openMonthlyField(app, dateKey: "2026-10-25")
+        second.typeText("NextLine")
+        let menu = app.descendants(matching: .any)["monthlyMenuButton"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), "目次ボタンがありません")
+        waitUntilHittable(menu, message: "目次ボタンを押せません")
+        menu.tap()
+        let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
+        let closed = NSPredicate(format: "exists == false")
+        let closedExpectation = XCTNSPredicateExpectation(predicate: closed, object: stillEditing)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [closedExpectation], timeout: 5),
+            .completed,
+            "焦点を外したあとも編集欄が閉じていません"
+        )
+        waitUntilTextShows(app, dateKey: "2026-10-25", text: "NextLine")
         waitForMonthTitle("2026年 10月", in: app)
     }
 
