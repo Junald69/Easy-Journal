@@ -183,6 +183,60 @@ final class MonthNavigationStoreTests: XCTestCase {
         XCTAssertTrue(outcome.blockedBySaveOrLoad)
     }
 
+    /// 同じ月のページが2枚あっても、移動では3枚目を作らない。元の月の記録は残る。
+    func testMoveReusesDuplicateMonthPagesWithoutCreatingAnother() throws {
+        guard let olderID = UUID(uuidString: "00000000-0000-0000-0000-000000000002"),
+              let newerID = UUID(uuidString: "00000000-0000-0000-0000-000000000001") else {
+            XCTFail("UUID の文字列を読めませんでした")
+            return
+        }
+        let (store, context, _) = try makeStore()
+        try store.setLogLine(dateKey: "2026-10-03", text: "十月")
+        _ = try store.addMonthlyTask(monthKey: "2026-10", title: "十月のタスク")
+
+        let olderPage = insertMonthlyPair(
+            in: context,
+            id: olderID,
+            monthKey: "2026-11",
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        _ = insertMonthlyPair(
+            in: context,
+            id: newerID,
+            monthKey: "2026-11",
+            createdAt: Date(timeIntervalSince1970: 2_000)
+        )
+        try context.save()
+        XCTAssertEqual(try monthlyPageCount(monthKey: "2026-11", in: context), 2)
+
+        let novemberKey = try XCTUnwrap(DateKey.nextMonthKey(after: "2026-10"))
+        XCTAssertEqual(novemberKey, "2026-11")
+        let opened = try store.findOrCreateMonthly(monthKey: novemberKey)
+        let openedAgain = try store.findOrCreateMonthly(monthKey: novemberKey)
+        XCTAssertEqual(opened.id, openedAgain.id)
+        XCTAssertEqual(opened.id, olderPage.monthly?.id)
+        XCTAssertEqual(try monthlyPageCount(monthKey: "2026-11", in: context), 2)
+        XCTAssertEqual(try monthlyPageCount(in: context), 3)
+
+        try store.setLogLine(dateKey: "2026-11-02", text: "十一月")
+        XCTAssertEqual(try monthlyPageCount(monthKey: "2026-11", in: context), 2)
+        XCTAssertEqual(
+            try store.monthlyLogContent(monthKey: "2026-11").textByDateKey["2026-11-02"],
+            "十一月"
+        )
+        XCTAssertNil(try store.monthlyLogContent(monthKey: "2026-11").textByDateKey["2026-10-03"])
+
+        let backKey = try XCTUnwrap(DateKey.previousMonthKey(before: novemberKey))
+        let october = try store.findOrCreateMonthly(monthKey: backKey)
+        XCTAssertEqual(october.monthKey, "2026-10")
+        XCTAssertEqual(try store.monthlyLogContent(monthKey: "2026-10").textByDateKey["2026-10-03"], "十月")
+        XCTAssertEqual(
+            try store.monthlyTasks(monthKey: "2026-10").map { task in task.title },
+            ["十月のタスク"]
+        )
+        XCTAssertEqual(try monthlyPageCount(monthKey: "2026-11", in: context), 2)
+    }
+
     // MARK: - ヘルパー
 
     private func makeStore() throws -> (store: JournalStore, context: ModelContext, container: ModelContainer) {
@@ -231,6 +285,27 @@ final class MonthNavigationStoreTests: XCTestCase {
         return pages.filter { page in
             page.kindRaw == PageKind.monthly.rawValue && page.monthKey == monthKey
         }.count
+    }
+
+    @discardableResult
+    private func insertMonthlyPair(
+        in context: ModelContext,
+        id: UUID,
+        monthKey: String,
+        createdAt: Date
+    ) -> Page {
+        let page = Page(
+            id: id,
+            kindRaw: PageKind.monthly.rawValue,
+            dateKey: nil,
+            monthKey: monthKey,
+            createdAt: createdAt
+        )
+        let monthly = MonthlyPage(monthKey: monthKey)
+        context.insert(page)
+        context.insert(monthly)
+        page.monthly = monthly
+        return page
     }
 
     private final class ThrowSwitch {

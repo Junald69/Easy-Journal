@@ -27,6 +27,10 @@ struct EasyJournalApp: App {
     private let storageErrorMessage: String?
     /// 起動引数。今日の再計算でも、同じ条件で固定日を見る。
     private let launchOptions: LaunchOptions
+    /// Debug かつメモリ上の保存先のときだけ、次の月移動を1回失敗させる。
+    private let monthMoveFailure: MonthMoveFailureInjection?
+    /// Debug かつメモリ上の保存先のときだけ、◀▶ を通さずに開く月。
+    private let debugJumpMonth: String?
     /// 今日の日付キー。月の画面に渡す。同じ日なら書き換えない。
     @State private var todayKey: String
     /// 今どのページを開いているか。成功の画面だけに渡す。
@@ -53,6 +57,16 @@ struct EasyJournalApp: App {
                 now: now,
                 calendar: calendar
             )
+        )
+        monthMoveFailure = MonthMoveFailureInjection.fromLaunchArgument(
+            options.failMonthMove,
+            inMemoryStore: options.inMemoryStore,
+            isDebugBuild: EasyJournalApp.debugBuild
+        )
+        debugJumpMonth = MonthMoveDebugJump.monthKey(
+            argument: options.debugJumpMonth,
+            inMemoryStore: options.inMemoryStore,
+            isDebugBuild: EasyJournalApp.debugBuild
         )
         do {
             let container = try StorageLocation.makeContainer(inMemory: options.inMemoryStore)
@@ -83,7 +97,12 @@ struct EasyJournalApp: App {
         WindowGroup {
             Group {
                 if let modelContainer {
-                    RootPageView(router: router, todayKey: todayKey)
+                    RootPageView(
+                        router: router,
+                        todayKey: todayKey,
+                        monthMoveFailure: monthMoveFailure,
+                        debugJumpMonth: debugJumpMonth
+                    )
                         .modelContainer(modelContainer)
                 } else {
                     VStack(spacing: 16) {

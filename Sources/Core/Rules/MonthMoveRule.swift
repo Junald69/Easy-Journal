@@ -2,23 +2,70 @@ import Foundation
 
 /// 月を移る前の判定。保存しない。画面を持たない。
 ///
+/// 画面の ◀▶ は、ここが返す段階だけを順に実行する。同じ判定を画面側に書き直さない。
 /// 1行を片付ける条件は、月のタスクを触るときと同じ（`MonthlyTaskActionRule`）。
 /// 保存に失敗したとき、そのあとの読み込みに失敗したときは、月を移さない。
 /// 文章を空にして消す下書きは、確認の前に消さない。
-/// タスクの追加欄に、空白以外の未確定の文字があるときも、月を移さない。文字は捨てない。
+/// タスクの追加欄に、空白以外の未確定の文字があるときは、1行の保存や編集終了より前に止める。
+/// 文字は捨てない。編集中の1行も閉じない。
 enum MonthMoveRule {
     /// ボタンを押した直後、保存するより前の段階。
-    enum Phase: Equatable {
+    ///
+    /// 1行の保存失敗は、ここには入れない。保存したあとの `AfterLogSave` で見る。
+    enum BeforeMove: Equatable {
         /// 空にした1行の確認を出す。月は移さない。下書きは残す。
         case confirmDelete
+        /// タスク名の未確定の文字を残して、月は移さない。1行は保存しない。編集も閉じない。
+        case keepTaskDraft
         /// 編集中の1行を、今までと同じ保存で確定してから続きを見る。
         case saveLog
-        /// 1行の保存か、そのあとの読み込みに失敗した。下書きを残して月は移さない。
-        case stayAfterLogFailure
-        /// タスク名の未確定の文字を残して、月は移さない。
-        case keepTaskDraft
         /// 移る先の月ページを用意して、読めたときだけ移る。
         case prepareDestination
+    }
+
+    /// 1行を保存したあと。タスク欄は、保存の前に見終わっている。
+    enum AfterLogSave: Equatable {
+        /// 1行の保存か、そのあとの読み込みに失敗した。下書きを残して月は移さない。
+        case stayAfterLogFailure
+        /// 移る先の月ページを用意して、読めたときだけ移る。
+        case prepareDestination
+    }
+
+    /// 移動の準備が終わったあとに出す失敗。成功は `none`。前の失敗は残さない。
+    enum MoveProblem: Equatable {
+        case none
+        case save
+        case load
+    }
+
+    /// 編集欄からフォーカスが外れたとき。◀▶ のキーボード閉じと同じ入口になりうる。
+    enum LogFocusLoss: Equatable {
+        /// 空にして消す確認。保存しない。
+        case confirmDelete
+        /// タスク欄に未確定がある。保存しない。編集も閉じない。
+        case keepForTaskDraft
+        /// 今までどおり保存する。
+        case save
+    }
+
+    /// Router が先に月を変えたとき、下書きをどう守るか。
+    struct ExternalMonthPlan: Equatable {
+        enum Log: Equatable {
+            case none
+            /// この日付へ保存する。表示中の月の日付には作り直さない。
+            case commit(dateKey: String)
+            /// 空にして消す確認。この日付は保存しない。
+            case confirmDelete(dateKey: String)
+        }
+
+        enum Task: Equatable {
+            case none
+            /// 未確定のタスク名は、この月のまま残す。開いた先の月には足さない。
+            case keep(monthKey: String)
+        }
+
+        var log: Log
+        var task: Task
     }
 
     /// 1回の移動で、画面がどうなるかの結果。テストが、画面の手順と突き合わせる。
@@ -29,9 +76,9 @@ enum MonthMoveRule {
         var isEditingLog: Bool
         var needsDeleteConfirmation: Bool
         var logDraft: String
-        /// 1行を保存したあとの戻り値。編集していないときは使わない。
+        /// 1行を保存したあとの戻り値。編集していないとき、保存の前に止まったときは使わない。
         var logSaveSucceeded: Bool
-        /// 1行の保存のあとの読み込みが失敗したか。編集していないときは使わない。
+        /// 1行の保存のあとの読み込みが失敗したか。編集していないとき、保存の前に止まったときは使わない。
         var loadFailed: Bool
         var taskDraft: String
         /// 移る先の月ページの保存が成功したか。そこまで進まないときは使わない。
@@ -48,9 +95,16 @@ enum MonthMoveRule {
         var taskDraft: String
         /// 行を消す確認を出す。出しただけでは消さない。
         var showsDeleteConfirmation: Bool
+        /// タスク欄が理由で止めた。止めたときだけ、案内の文を出す。
+        var showsTaskDraftBlockMessage: Bool
         /// 保存か読み込みに失敗して、月を止めた。
         var blockedBySaveOrLoad: Bool
+        /// この移動で出す失敗。成功、または保存の前に止めたときは `none`。
+        var moveProblem: MoveProblem
     }
+
+    /// タスク欄が理由で月を止めたときに出す文。
+    static let taskDraftBlockMessage = "タスクを追加するか、入力を消してから月を移動してください"
 
     /// 前後のどちらか。不正な月キーなら nil。
     static func destination(from monthKey: String, goingForward: Bool) -> String? {
@@ -68,42 +122,65 @@ enum MonthMoveRule {
         return trimmed.isEmpty == false
     }
 
-    /// 保存するより前。削除の確認を、タスク欄より先に見る。
+    /// 1行の保存先は、編集を始めた日付のまま。開いている月からは作り直さない。
+    static func logSaveDateKey(editingDateKey: String) -> String? {
+        guard DateKey.isValidDayKey(editingDateKey) else {
+            return nil
+        }
+        return editingDateKey
+    }
+
+    /// タスクの保存先の月。書き始めた月があれば、いま開いている月では上書きしない。
+    static func taskSaveMonthKey(anchorMonthKey: String?, displayedMonthKey: String) -> String {
+        if let anchorMonthKey, DateKey.isValidMonthKey(anchorMonthKey) {
+            return anchorMonthKey
+        }
+        return displayedMonthKey
+    }
+
+    /// 保存するより前。削除の確認を先に、その次にタスク欄を見る。1行の保存は最後。
     static func phaseBeforeSideEffects(
         isEditingLog: Bool,
         needsDeleteConfirmation: Bool,
         taskDraft: String
-    ) -> Phase {
+    ) -> BeforeMove {
         if isEditingLog && needsDeleteConfirmation {
             return .confirmDelete
-        }
-        if isEditingLog {
-            return .saveLog
         }
         if hasUncommittedTaskDraft(taskDraft) {
             return .keepTaskDraft
         }
+        if isEditingLog {
+            return .saveLog
+        }
         return .prepareDestination
+    }
+
+    /// 編集欄からフォーカスが外れたとき。削除の確認、タスク欄、保存の順。
+    ///
+    /// ◀▶ の最初のタップがキーボードを閉じるだけのとき、この判定が先に走る。
+    /// タスク欄に未確定があるときは、ここでは保存も閉じもしない。
+    static func logFocusLoss(needsDeleteConfirmation: Bool, taskDraft: String) -> LogFocusLoss {
+        if needsDeleteConfirmation {
+            return .confirmDelete
+        }
+        if hasUncommittedTaskDraft(taskDraft) {
+            return .keepForTaskDraft
+        }
+        return .save
     }
 
     /// 1行を保存したあと。続けてよいかは `MonthlyTaskActionRule` に聞く。
     ///
     /// 保存に失敗したときも、保存のあとの読み込みに失敗したときも、月は移さない。
-    /// どちらも、1行の下書きは捨てない。
-    static func phaseAfterLogSave(
-        logSaveSucceeded: Bool,
-        loadFailed: Bool,
-        taskDraft: String
-    ) -> Phase {
+    /// どちらも、1行の下書きは捨てない。タスク欄は、保存の前に見終わっている。
+    static func phaseAfterLogSave(logSaveSucceeded: Bool, loadFailed: Bool) -> AfterLogSave {
         let mayContinue = MonthlyTaskActionRule.mayProceedAfterLogSave(
             logSaveSucceeded: logSaveSucceeded,
             loadFailed: loadFailed
         )
         if mayContinue == false {
             return .stayAfterLogFailure
-        }
-        if hasUncommittedTaskDraft(taskDraft) {
-            return .keepTaskDraft
         }
         return .prepareDestination
     }
@@ -119,23 +196,79 @@ enum MonthMoveRule {
         return true
     }
 
+    /// この移動で出す失敗。成功なら `none` で、前の失敗を消す。
+    ///
+    /// 保存の失敗と読み込みの失敗は、同時には出さない。新しい方だけを残す。
+    static func problemAfterPrepare(pageSaveSucceeded: Bool, destinationLoadSucceeded: Bool) -> MoveProblem {
+        if pageSaveSucceeded == false {
+            return .save
+        }
+        if destinationLoadSucceeded == false {
+            return .load
+        }
+        return .none
+    }
+
+    /// 前の移動失敗を、今回の結果で置き換える。成功（`none`）は消す。
+    static func replacing(previous: MoveProblem, with attempt: MoveProblem) -> MoveProblem {
+        attempt
+    }
+
     /// この段階で、1行の下書きを画面から消してよいか。
     ///
-    /// 保存も読み込みも成功したあとの段階だけ true。
-    /// 確認の前、保存の前、失敗したあとは false。入力を残す。
-    static func mayDiscardLogDraft(_ phase: Phase) -> Bool {
-        switch phase {
-        case .prepareDestination, .keepTaskDraft:
+    /// 保存も、そのあとの読み込みも成功したときだけ true。失敗したあとは false。
+    static func mayDiscardLogDraft(_ after: AfterLogSave) -> Bool {
+        switch after {
+        case .prepareDestination:
             return true
-        case .confirmDelete, .saveLog, .stayAfterLogFailure:
+        case .stayAfterLogFailure:
             return false
         }
+    }
+
+    /// Router が画面の外から月を変えたとき。下書きは、書き始めた日付と月にだけ触る。
+    ///
+    /// 開いた先の月の日付や月へは保存しない。空にして消す下書きは、確認なしでは消さない。
+    /// タスク名の未確定は、書き始めた月のまま残す。無ければ、変わる前の月を使う。
+    static func externalMonthPlan(
+        loadedMonthKey: String,
+        routerMonthKey: String,
+        editingDateKey: String?,
+        needsDeleteConfirmation: Bool,
+        taskDraft: String,
+        taskDraftMonthKey: String?
+    ) -> ExternalMonthPlan {
+        if routerMonthKey == loadedMonthKey {
+            return ExternalMonthPlan(log: .none, task: .none)
+        }
+        let log: ExternalMonthPlan.Log
+        if let editingDateKey, let target = logSaveDateKey(editingDateKey: editingDateKey) {
+            if needsDeleteConfirmation {
+                log = .confirmDelete(dateKey: target)
+            } else {
+                log = .commit(dateKey: target)
+            }
+        } else {
+            log = .none
+        }
+        let task: ExternalMonthPlan.Task
+        if hasUncommittedTaskDraft(taskDraft) {
+            let anchor = taskSaveMonthKey(
+                anchorMonthKey: taskDraftMonthKey,
+                displayedMonthKey: loadedMonthKey
+            )
+            task = .keep(monthKey: anchor)
+        } else {
+            task = .none
+        }
+        return ExternalMonthPlan(log: log, task: task)
     }
 
     /// 画面の手順と同じ順で、移動の結果を返す。
     ///
     /// 失敗したときは、開いている月と1行の下書きを変えない。
-    /// タスク欄の未確定の文字も、移れたとき以外は変えない。
+    /// タスク欄の未確定で止めたときは、1行は保存しない。編集も閉じない。
+    /// 移る先の保存か読み込みに失敗したときは、Router の月も変えない。
     static func result(of attempt: Attempt) -> Result {
         let stay = Result(
             monthKey: attempt.currentMonthKey,
@@ -143,7 +276,9 @@ enum MonthMoveRule {
             isEditingLog: attempt.isEditingLog,
             taskDraft: attempt.taskDraft,
             showsDeleteConfirmation: false,
-            blockedBySaveOrLoad: false
+            showsTaskDraftBlockMessage: false,
+            blockedBySaveOrLoad: false,
+            moveProblem: .none
         )
         guard let destination = attempt.destinationMonthKey else {
             return stay
@@ -162,19 +297,15 @@ enum MonthMoveRule {
             blocked.showsDeleteConfirmation = true
             return blocked
         case .keepTaskDraft:
-            return stay
+            var blocked = stay
+            blocked.showsTaskDraftBlockMessage = true
+            return blocked
         case .prepareDestination:
-            return commit(
-                attempt,
-                destination: destination,
-                stay: stay,
-                clearLogDraft: false
-            )
+            return commit(attempt, destination: destination, stay: stay, clearLogDraft: false)
         case .saveLog:
             let after = phaseAfterLogSave(
                 logSaveSucceeded: attempt.logSaveSucceeded,
-                loadFailed: attempt.loadFailed,
-                taskDraft: attempt.taskDraft
+                loadFailed: attempt.loadFailed
             )
             switch after {
             case .stayAfterLogFailure:
@@ -183,25 +314,9 @@ enum MonthMoveRule {
                 blocked.isEditingLog = true
                 blocked.logDraft = attempt.logDraft
                 return blocked
-            case .keepTaskDraft:
-                var kept = stay
-                kept.isEditingLog = false
-                kept.logDraft = ""
-                return kept
             case .prepareDestination:
-                return commit(
-                    attempt,
-                    destination: destination,
-                    stay: stay,
-                    clearLogDraft: true
-                )
-            case .confirmDelete, .saveLog:
-                return stay
+                return commit(attempt, destination: destination, stay: stay, clearLogDraft: true)
             }
-        case .stayAfterLogFailure:
-            var blocked = stay
-            blocked.blockedBySaveOrLoad = true
-            return blocked
         }
     }
 
@@ -219,9 +334,14 @@ enum MonthMoveRule {
             pageSaveSucceeded: attempt.pageSaveSucceeded,
             destinationLoadSucceeded: attempt.destinationLoadSucceeded
         )
+        let problem = problemAfterPrepare(
+            pageSaveSucceeded: attempt.pageSaveSucceeded,
+            destinationLoadSucceeded: attempt.destinationLoadSucceeded
+        )
         if ready == false {
             var blocked = stay
             blocked.blockedBySaveOrLoad = true
+            blocked.moveProblem = replacing(previous: .none, with: problem)
             if clearLogDraft {
                 blocked.isEditingLog = false
                 blocked.logDraft = ""
@@ -234,7 +354,9 @@ enum MonthMoveRule {
         moved.logDraft = ""
         moved.taskDraft = ""
         moved.showsDeleteConfirmation = false
+        moved.showsTaskDraftBlockMessage = false
         moved.blockedBySaveOrLoad = false
+        moved.moveProblem = replacing(previous: .save, with: .none)
         return moved
     }
 }
