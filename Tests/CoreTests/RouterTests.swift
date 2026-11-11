@@ -153,6 +153,110 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(router.current, .daily(dateKey: "2026-10-27"))
     }
 
+    /// 依頼だけでは、表示している月は変わらない。承諾したときだけ変わる。
+    func testRequestMonthWaitsForCommit() throws {
+        let router = try octoberRouter()
+        XCTAssertNil(router.monthRequest)
+
+        router.requestMonth("2026-11")
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-11")
+        let firstToken = try XCTUnwrap(router.monthRequest).token
+
+        router.requestMonth("2026-13")
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-11")
+        XCTAssertEqual(router.monthRequest?.token, firstToken)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+
+        router.requestMonth("2027-01")
+        XCTAssertEqual(router.monthRequest?.monthKey, "2027-01")
+        XCTAssertNotEqual(router.monthRequest?.token, firstToken)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+
+        router.commitDisplayedMonth("2026-13")
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2027-01")
+
+        router.commitDisplayedMonth("2027-01")
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2027-01"))
+        XCTAssertNil(router.monthRequest)
+    }
+
+    /// 月の画面が出ているあいだ、別の月への open は依頼になる。表示月は変えない。
+    func testGuardedOpenAsksInsteadOfChangingTheMonth() throws {
+        let router = try octoberRouter()
+        router.beginGuardingMonthlyNavigation()
+
+        router.open(.monthlyLog(monthKey: "2026-11"))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-11")
+
+        router.open(.daily(dateKey: "2026-10-27"))
+        XCTAssertEqual(router.current, .daily(dateKey: "2026-10-27"))
+        XCTAssertNil(router.monthRequest)
+
+        router.open(.monthlyLog(monthKey: "2026-10"))
+        router.beginGuardingMonthlyNavigation()
+        router.commitDisplayedMonth("2026-12")
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-12"))
+        XCTAssertNil(router.monthRequest)
+
+        router.open(.monthlyLog(monthKey: "2026-11"))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-12"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-11")
+
+        router.endGuardingMonthlyNavigation()
+        XCTAssertNil(router.monthRequest)
+        router.open(.monthlyLog(monthKey: "2027-01"))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2027-01"))
+        XCTAssertNil(router.monthRequest)
+    }
+
+    /// 月の画面が出ているあいだ、月の URL も依頼になる。日の URL は、今までどおり開く。
+    func testGuardedURLOpenAsksForAnotherMonth() throws {
+        let calendar = try makeCalendar(timeZoneIdentifier: "Asia/Tokyo")
+        let now = try makeDate(
+            year: 2026,
+            month: 10,
+            day: 27,
+            hour: 12,
+            minute: 0,
+            second: 0,
+            calendar: calendar
+        )
+        let router = Router(now: now, calendar: calendar)
+        router.beginGuardingMonthlyNavigation()
+
+        let monthly = try XCTUnwrap(URL(string: "easyjournal://monthly/2026-12"))
+        XCTAssertTrue(router.open(url: monthly, now: now, calendar: calendar))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertEqual(router.monthRequest?.monthKey, "2026-12")
+
+        let today = try XCTUnwrap(URL(string: "easyjournal://monthly/today"))
+        XCTAssertTrue(router.open(url: today, now: now, calendar: calendar))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertNil(router.monthRequest)
+
+        let daily = try XCTUnwrap(URL(string: "easyjournal://daily/2026-10-27"))
+        XCTAssertTrue(router.open(url: daily, now: now, calendar: calendar))
+        XCTAssertEqual(router.current, .daily(dateKey: "2026-10-27"))
+        XCTAssertNil(router.monthRequest)
+    }
+
+    private func octoberRouter() throws -> Router {
+        let calendar = try makeCalendar(timeZoneIdentifier: "Asia/Tokyo")
+        let now = try makeDate(
+            year: 2026,
+            month: 10,
+            day: 27,
+            hour: 12,
+            minute: 0,
+            second: 0,
+            calendar: calendar
+        )
+        return Router(now: now, calendar: calendar)
+    }
+
     private func makeCalendar(timeZoneIdentifier: String) throws -> Calendar {
         let timeZone = try XCTUnwrap(TimeZone(identifier: timeZoneIdentifier))
         return DateKey.makeCalendar(timeZone: timeZone)

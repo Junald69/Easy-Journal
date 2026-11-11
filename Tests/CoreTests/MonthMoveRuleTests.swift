@@ -238,11 +238,16 @@ final class MonthMoveRuleTests: XCTestCase {
         XCTAssertEqual(outcome.moveProblem, .none)
     }
 
-    /// 成功した移動は、前の失敗表示を消す。新しい失敗は、前の種類を置き換える。
+    /// 成功した移動は失敗を出さない。新しい失敗は、保存を読み込みより先に残す。
     func testMoveProblemReplacesThePreviousFailure() {
-        XCTAssertEqual(MonthMoveRule.replacing(previous: .load, with: .save), .save)
-        XCTAssertEqual(MonthMoveRule.replacing(previous: .save, with: .load), .load)
-        XCTAssertEqual(MonthMoveRule.replacing(previous: .load, with: .none), .none)
+        XCTAssertEqual(
+            MonthMoveRule.problemAfterPrepare(pageSaveSucceeded: false, destinationLoadSucceeded: true),
+            .save
+        )
+        XCTAssertEqual(
+            MonthMoveRule.problemAfterPrepare(pageSaveSucceeded: true, destinationLoadSucceeded: false),
+            .load
+        )
         XCTAssertEqual(
             MonthMoveRule.problemAfterPrepare(pageSaveSucceeded: true, destinationLoadSucceeded: true),
             .none
@@ -251,6 +256,15 @@ final class MonthMoveRuleTests: XCTestCase {
             MonthMoveRule.problemAfterPrepare(pageSaveSucceeded: false, destinationLoadSucceeded: false),
             .save
         )
+        let replaced = MonthMoveRule.result(of: attempt(
+            destination: "2026-11",
+            pageSaveSucceeded: false
+        ))
+        XCTAssertEqual(replaced.moveProblem, .save)
+        XCTAssertEqual(replaced.monthKey, "2026-10")
+        let cleared = MonthMoveRule.result(of: attempt(destination: "2026-11"))
+        XCTAssertEqual(cleared.moveProblem, .none)
+        XCTAssertEqual(cleared.monthKey, "2026-11")
     }
 
     /// 12月の次は翌年1月。1月の前は前年12月。移れたときは下書きを残さない。
@@ -279,61 +293,68 @@ final class MonthMoveRuleTests: XCTestCase {
     func testLogSaveTargetStaysOnTheEditedDate() {
         XCTAssertEqual(MonthMoveRule.logSaveDateKey(editingDateKey: "2026-10-03"), "2026-10-03")
         XCTAssertNil(MonthMoveRule.logSaveDateKey(editingDateKey: "2026-10"))
-        XCTAssertEqual(
-            MonthMoveRule.taskSaveMonthKey(anchorMonthKey: "2026-10", displayedMonthKey: "2026-11"),
-            "2026-10"
-        )
-        XCTAssertEqual(
-            MonthMoveRule.taskSaveMonthKey(anchorMonthKey: nil, displayedMonthKey: "2026-11"),
-            "2026-11"
-        )
+        XCTAssertNil(MonthMoveRule.logSaveDateKey(editingDateKey: ""))
     }
 
-    /// Router が先に月を変えても、下書きは書き始めた日付と月に残す。別の月へは書かない。
-    func testExternalMonthChangeKeepsDraftsOnTheirSource() {
-        let commit = MonthMoveRule.externalMonthPlan(
-            loadedMonthKey: "2026-10",
-            routerMonthKey: "2026-11",
-            editingDateKey: "2026-10-26",
-            needsDeleteConfirmation: false,
-            taskDraft: "年賀状",
-            taskDraftMonthKey: "2026-10"
-        )
-        XCTAssertEqual(commit.log, .commit(dateKey: "2026-10-26"))
-        XCTAssertEqual(commit.task, .keep(monthKey: "2026-10"))
+    /// 外から頼まれた月も、◀▶ と同じ結果になる。隣の月でなくても同じ。
+    ///
+    /// 保存に失敗したら下書きと月を残す。タスク欄と削除確認は、保存より前に止める。
+    /// 12月から1月、1月から12月も、この結果で決まる。
+    func testRequestedMonthFollowsTheSameMoveResult() {
+        let saved = MonthMoveRule.result(of: attempt(
+            current: "2026-10",
+            destination: "2026-12",
+            isEditingLog: true,
+            logDraft: "残す",
+            logSaveSucceeded: true
+        ))
+        XCTAssertEqual(saved.monthKey, "2026-12")
+        XCTAssertEqual(saved.logDraft, "")
+        XCTAssertFalse(saved.isEditingLog)
+        XCTAssertEqual(saved.taskDraft, "")
 
-        let confirm = MonthMoveRule.externalMonthPlan(
-            loadedMonthKey: "2026-10",
-            routerMonthKey: "2027-01",
-            editingDateKey: "2026-10-24",
-            needsDeleteConfirmation: true,
-            taskDraft: "  ",
-            taskDraftMonthKey: nil
-        )
-        XCTAssertEqual(confirm.log, .confirmDelete(dateKey: "2026-10-24"))
-        XCTAssertEqual(confirm.task, .none)
+        let failedSave = MonthMoveRule.result(of: attempt(
+            current: "2026-12",
+            destination: "2027-01",
+            isEditingLog: true,
+            logDraft: "下書き",
+            logSaveSucceeded: false
+        ))
+        XCTAssertEqual(failedSave.monthKey, "2026-12")
+        XCTAssertEqual(failedSave.logDraft, "下書き")
+        XCTAssertTrue(failedSave.isEditingLog)
+        XCTAssertTrue(failedSave.blockedBySaveOrLoad)
+        XCTAssertFalse(failedSave.showsDeleteConfirmation)
 
-        let anchored = MonthMoveRule.externalMonthPlan(
-            loadedMonthKey: "2026-10",
-            routerMonthKey: "2026-11",
-            editingDateKey: nil,
-            needsDeleteConfirmation: false,
+        let task = MonthMoveRule.result(of: attempt(
+            current: "2027-01",
+            destination: "2026-12",
+            isEditingLog: true,
+            logDraft: "元日",
+            logSaveSucceeded: false,
             taskDraft: "未確定",
-            taskDraftMonthKey: nil
-        )
-        XCTAssertEqual(anchored.log, .none)
-        XCTAssertEqual(anchored.task, .keep(monthKey: "2026-10"))
+            pageSaveSucceeded: false
+        ))
+        XCTAssertEqual(task.monthKey, "2027-01")
+        XCTAssertEqual(task.logDraft, "元日")
+        XCTAssertTrue(task.isEditingLog)
+        XCTAssertEqual(task.taskDraft, "未確定")
+        XCTAssertTrue(task.showsTaskDraftBlockMessage)
+        XCTAssertFalse(task.blockedBySaveOrLoad)
 
-        let same = MonthMoveRule.externalMonthPlan(
-            loadedMonthKey: "2026-11",
-            routerMonthKey: "2026-11",
-            editingDateKey: "2026-11-01",
-            needsDeleteConfirmation: false,
-            taskDraft: "残す",
-            taskDraftMonthKey: "2026-10"
-        )
-        XCTAssertEqual(same.log, .none)
-        XCTAssertEqual(same.task, .none)
+        let confirm = MonthMoveRule.result(of: attempt(
+            current: "2026-10",
+            destination: "2026-11",
+            isEditingLog: true,
+            needsDeleteConfirmation: true,
+            logDraft: "   ",
+            taskDraft: "残すタスク"
+        ))
+        XCTAssertEqual(confirm.monthKey, "2026-10")
+        XCTAssertEqual(confirm.logDraft, "   ")
+        XCTAssertEqual(confirm.taskDraft, "残すタスク")
+        XCTAssertTrue(confirm.showsDeleteConfirmation)
+        XCTAssertFalse(confirm.blockedBySaveOrLoad)
     }
 
     /// フォーカスが外れたときも、削除の確認を先に、タスク欄を保存より前に見る。

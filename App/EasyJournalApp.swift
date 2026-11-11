@@ -16,7 +16,7 @@ import SwiftUI
 /// `-openPage` の文字列が読めたときは、そのページを最初のページにする。
 /// 無いか、読めないときは、いまの月の記録（Monthly Log）のまま。
 /// 開いている月は、起動のときに決める。日付が変わっても月は動かさない。
-/// ◀▶ を押して移動できたときだけ、開いている月が変わる。
+/// ◀▶ と、外からの月の依頼は、移動できたときだけ開いている月を変える。
 /// `-todayKey` は、Debug かつ `-inMemoryStore` のときだけ、「今日」を固定する。
 /// 今日の日付キーは、起動時だけでなく、画面に戻ったときと、日やタイムゾーンが変わったときにも計算し直す。
 @main
@@ -29,7 +29,7 @@ struct EasyJournalApp: App {
     private let launchOptions: LaunchOptions
     /// Debug かつメモリ上の保存先のときだけ、次の月移動を1回失敗させる。
     private let monthMoveFailure: MonthMoveFailureInjection?
-    /// Debug かつメモリ上の保存先のときだけ、◀▶ を通さずに開く月。
+    /// Debug かつメモリ上の保存先のときだけ、◀▶ と同じ確認を通して開く月。
     private let debugJumpMonth: String?
     /// 今日の日付キー。月の画面に渡す。同じ日なら書き換えない。
     @State private var todayKey: String

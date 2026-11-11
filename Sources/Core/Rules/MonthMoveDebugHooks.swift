@@ -9,6 +9,8 @@ enum MonthMoveFailureInjection: Equatable {
     case save
     /// 移る先の読み込みに失敗したことにする。
     case load
+    /// 一言日記の保存を、`setLogLine` の保存で1回失敗させる。
+    case log
 
     /// 起動引数の文字列から読む。条件を満たさないときは nil。
     static func fromLaunchArgument(
@@ -24,13 +26,22 @@ enum MonthMoveFailureInjection: Equatable {
             return .save
         case "load":
             return .load
+        case "log":
+            return .log
         default:
             return nil
         }
     }
 }
 
-/// 画面テストが、◀▶ を通さずに Router の月だけを変えるための印。
+/// 画面テストが、一言日記の保存だけを失敗させるときに `JournalStore` へ渡すエラー。
+///
+/// 記録は作らない。成功した保存の代わりには使わない。
+enum MonthMoveDebugSaveError: Error {
+    case forced
+}
+
+/// 画面テストが、◀▶ を通さずに月を開く依頼を出すための印。
 ///
 /// Debug ビルドかつメモリ上の保存先で、月キーとして読めるときだけ返す。
 enum MonthMoveDebugJump {

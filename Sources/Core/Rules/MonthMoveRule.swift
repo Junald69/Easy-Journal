@@ -2,7 +2,8 @@ import Foundation
 
 /// 月を移る前の判定。保存しない。画面を持たない。
 ///
-/// 画面の ◀▶ は、ここが返す段階だけを順に実行する。同じ判定を画面側に書き直さない。
+/// 画面の ◀▶ も、外からの「この月を開いて」も、ここが返す段階だけを順に実行する。
+/// 移動先の月キーは、呼び出し側が渡す。同じ判定を画面側に書き直さない。
 /// 1行を片付ける条件は、月のタスクを触るときと同じ（`MonthlyTaskActionRule`）。
 /// 保存に失敗したとき、そのあとの読み込みに失敗したときは、月を移さない。
 /// 文章を空にして消す下書きは、確認の前に消さない。
@@ -46,26 +47,6 @@ enum MonthMoveRule {
         case keepForTaskDraft
         /// 今までどおり保存する。
         case save
-    }
-
-    /// Router が先に月を変えたとき、下書きをどう守るか。
-    struct ExternalMonthPlan: Equatable {
-        enum Log: Equatable {
-            case none
-            /// この日付へ保存する。表示中の月の日付には作り直さない。
-            case commit(dateKey: String)
-            /// 空にして消す確認。この日付は保存しない。
-            case confirmDelete(dateKey: String)
-        }
-
-        enum Task: Equatable {
-            case none
-            /// 未確定のタスク名は、この月のまま残す。開いた先の月には足さない。
-            case keep(monthKey: String)
-        }
-
-        var log: Log
-        var task: Task
     }
 
     /// 1回の移動で、画面がどうなるかの結果。テストが、画面の手順と突き合わせる。
@@ -128,14 +109,6 @@ enum MonthMoveRule {
             return nil
         }
         return editingDateKey
-    }
-
-    /// タスクの保存先の月。書き始めた月があれば、いま開いている月では上書きしない。
-    static func taskSaveMonthKey(anchorMonthKey: String?, displayedMonthKey: String) -> String {
-        if let anchorMonthKey, DateKey.isValidMonthKey(anchorMonthKey) {
-            return anchorMonthKey
-        }
-        return displayedMonthKey
     }
 
     /// 保存するより前。削除の確認を先に、その次にタスク欄を見る。1行の保存は最後。
@@ -209,11 +182,6 @@ enum MonthMoveRule {
         return .none
     }
 
-    /// 前の移動失敗を、今回の結果で置き換える。成功（`none`）は消す。
-    static func replacing(previous: MoveProblem, with attempt: MoveProblem) -> MoveProblem {
-        attempt
-    }
-
     /// この段階で、1行の下書きを画面から消してよいか。
     ///
     /// 保存も、そのあとの読み込みも成功したときだけ true。失敗したあとは false。
@@ -226,45 +194,9 @@ enum MonthMoveRule {
         }
     }
 
-    /// Router が画面の外から月を変えたとき。下書きは、書き始めた日付と月にだけ触る。
-    ///
-    /// 開いた先の月の日付や月へは保存しない。空にして消す下書きは、確認なしでは消さない。
-    /// タスク名の未確定は、書き始めた月のまま残す。無ければ、変わる前の月を使う。
-    static func externalMonthPlan(
-        loadedMonthKey: String,
-        routerMonthKey: String,
-        editingDateKey: String?,
-        needsDeleteConfirmation: Bool,
-        taskDraft: String,
-        taskDraftMonthKey: String?
-    ) -> ExternalMonthPlan {
-        if routerMonthKey == loadedMonthKey {
-            return ExternalMonthPlan(log: .none, task: .none)
-        }
-        let log: ExternalMonthPlan.Log
-        if let editingDateKey, let target = logSaveDateKey(editingDateKey: editingDateKey) {
-            if needsDeleteConfirmation {
-                log = .confirmDelete(dateKey: target)
-            } else {
-                log = .commit(dateKey: target)
-            }
-        } else {
-            log = .none
-        }
-        let task: ExternalMonthPlan.Task
-        if hasUncommittedTaskDraft(taskDraft) {
-            let anchor = taskSaveMonthKey(
-                anchorMonthKey: taskDraftMonthKey,
-                displayedMonthKey: loadedMonthKey
-            )
-            task = .keep(monthKey: anchor)
-        } else {
-            task = .none
-        }
-        return ExternalMonthPlan(log: log, task: task)
-    }
-
     /// 画面の手順と同じ順で、移動の結果を返す。
+    ///
+    /// 移動先は、◀▶ の隣の月でも、外から頼まれた月でも同じ。
     ///
     /// 失敗したときは、開いている月と1行の下書きを変えない。
     /// タスク欄の未確定で止めたときは、1行は保存しない。編集も閉じない。
@@ -341,7 +273,7 @@ enum MonthMoveRule {
         if ready == false {
             var blocked = stay
             blocked.blockedBySaveOrLoad = true
-            blocked.moveProblem = replacing(previous: .none, with: problem)
+            blocked.moveProblem = problem
             if clearLogDraft {
                 blocked.isEditingLog = false
                 blocked.logDraft = ""
@@ -356,7 +288,7 @@ enum MonthMoveRule {
         moved.showsDeleteConfirmation = false
         moved.showsTaskDraftBlockMessage = false
         moved.blockedBySaveOrLoad = false
-        moved.moveProblem = replacing(previous: .save, with: .none)
+        moved.moveProblem = .none
         return moved
     }
 }
