@@ -711,9 +711,11 @@ final class ScreenshotTests: XCTestCase {
 
         let second = openMonthlyField(app, dateKey: "2026-10-25")
         second.typeText("NextLine")
-        // キーボードが開いていると、◀▶ の最初の1回はキーボードを閉じるだけ、のことがある。
-        // その焦点外れで保存して閉じる。月は動かない。
-        tapMonthButton("monthlyNextButton", in: app)
+        // ログの上で指を動かすと、キーボードが閉じて焦点が外れる。◀▶ は押さない。
+        let screen = app.descendants(matching: .any)["monthlyLogScreen"]
+        let start = screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let end = screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
+        start.press(forDuration: 0.05, thenDragTo: end)
         waitForMonthTitle("2026年 10月", in: app)
         let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
         let closed = NSPredicate(format: "exists == false")
