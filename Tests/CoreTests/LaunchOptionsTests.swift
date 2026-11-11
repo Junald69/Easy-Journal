@@ -26,13 +26,17 @@ final class LaunchOptionsTests: XCTestCase {
             "load",
             "-debugJumpMonth",
             "2026-11",
+            "-debugOpenURL",
+            "easyjournal://tracker/2026-10",
         ])
         XCTAssertTrue(options.inMemoryStore)
         XCTAssertEqual(options.failMonthMove, "load")
         XCTAssertEqual(options.debugJumpMonth, "2026-11")
+        XCTAssertEqual(options.debugOpenURL, "easyjournal://tracker/2026-10")
 
         let absent = LaunchOptions(arguments: ["EasyJournal"])
         XCTAssertNil(absent.failMonthMove)
         XCTAssertNil(absent.debugJumpMonth)
+        XCTAssertNil(absent.debugOpenURL)
     }
 }

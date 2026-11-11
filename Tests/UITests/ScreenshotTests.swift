@@ -577,6 +577,90 @@ final class ScreenshotTests: XCTestCase {
         )
     }
 
+    /// 月の画面が出ているあいだ、習慣表を開いても、未確定と保存失敗ではページを変えない。
+    /// 保存できたときだけ、習慣表の仮画面へ移る。
+    func testGuardedTrackerOpenKeepsDraftUntilSaveThenSwitches() {
+        let dateKey = "2026-10-26"
+        let app = launchMonthly(
+            extraArguments: [
+                "-failMonthMove",
+                "log",
+                "-debugOpenURL",
+                "easyjournal://tracker/2026-10",
+            ],
+            includeSampleData: false
+        )
+        waitForMonthlyLog(app)
+
+        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        revealMonthlyTask(addButton, in: app)
+        waitUntilHittable(addButton, message: "タスクの追加を押せません")
+        addButton.tap()
+        let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
+        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
+        taskField.tap()
+        taskField.typeText("StayTask")
+        requestDebugOpen(in: app, untilMarker: "monthlyTaskDraftBlockMessage")
+
+        waitForMonthTitle("2026年 10月", in: app)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["currentPageText"].exists,
+            "タスクの未確定なのにページが変わりました"
+        )
+        let taskShown = taskField.value as? String ?? ""
+        XCTAssertTrue(taskShown.contains("StayTask"), "未確定のタスク名が消えました: " + taskShown)
+        clearTaskTitle(taskField, knownText: "StayTask", app: app)
+
+        let field = openMonthlyField(app, dateKey: dateKey)
+        field.typeText("KeepDraft")
+        requestDebugOpen(in: app, untilMarker: "monthlySaveError")
+        waitForMonthTitle("2026年 10月", in: app)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["currentPageText"].exists,
+            "保存に失敗したのにページが変わりました"
+        )
+        let shown = field.value as? String ?? ""
+        XCTAssertTrue(shown.contains("KeepDraft"), "失敗した下書きが見えません: " + shown)
+
+        requestDebugOpen(in: app, untilMarker: "currentPageText")
+        let page = app.descendants(matching: .any)["currentPageText"]
+        XCTAssertEqual(page.label, "tracker:2026-10")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlyLogScreen"].exists,
+            "保存できたあとも月の画面が残っています"
+        )
+    }
+
+    /// ◀▶ と外からの依頼のあと、タイトルと行は同じ月を出す。
+    func testTitleAndContentStayOnTheSameMonth() {
+        let app = launchMonthly(extraArguments: ["-debugJumpMonth", "2026-12"])
+        waitForMonthlyLog(app)
+        XCTAssertEqual(app.descendants(matching: .any)["monthlyTitle"].label, "2026年 10月")
+        XCTAssertTrue(app.descendants(matching: .any)["monthlyLogRow-2026-10-27"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["monthlyLogRow-2026-11-01"].exists)
+
+        moveMonthConsistently(
+            button: "monthlyNextButton",
+            title: "2026年 11月",
+            rowDateKey: "2026-11-01",
+            absentDateKey: "2026-10-27",
+            in: app
+        )
+        moveMonthConsistently(
+            button: "monthlyPreviousButton",
+            title: "2026年 10月",
+            rowDateKey: "2026-10-27",
+            absentDateKey: "2026-11-01",
+            in: app
+        )
+        jumpMonthConsistently(
+            title: "2026年 12月",
+            rowDateKey: "2026-12-01",
+            absentDateKey: "2026-10-27",
+            in: app
+        )
+    }
+
     /// 外からの月移動でも、削除確認のキャンセルは記録を残す。「消す」はその行だけ消して、月は移さない。
     func testExternalDeleteConfirmationCancelKeepsLineAndDeleteRemovesOnlyThatLine() {
         let dateKey = "2026-10-24"
@@ -836,6 +920,108 @@ final class ScreenshotTests: XCTestCase {
             attempt += 1
         }
         waitForMonthTitle(title, in: app)
+    }
+
+    /// 外からページを開く。キーボードが最初のタップを取るときは、印が出るまでもう一度押す。
+    private func requestDebugOpen(in app: XCUIApplication, untilMarker identifier: String) {
+        let open = app.descendants(matching: .any)["debugOpenURL"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "外部からのページ移動がありません")
+        var attempt = 0
+        while attempt < 4 {
+            let marker = app.descendants(matching: .any)[identifier].firstMatch
+            if marker.exists {
+                return
+            }
+            if open.exists {
+                waitUntilHittable(open, message: "外部からのページ移動を押せません")
+                open.tap()
+            }
+            if marker.waitForExistence(timeout: 2) {
+                return
+            }
+            attempt += 1
+        }
+        let marker = app.descendants(matching: .any)[identifier].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 5), identifier + " が出ません")
+    }
+
+    /// ◀▶ のあと、タイトルと行が別の月になっていないことを見る。
+    private func moveMonthConsistently(
+        button: String,
+        title: String,
+        rowDateKey: String,
+        absentDateKey: String,
+        in app: XCUIApplication
+    ) {
+        var attempt = 0
+        while attempt < 2 {
+            tapMonthButton(button, in: app)
+            if waitUntilMonthIsConsistent(
+                title: title,
+                rowDateKey: rowDateKey,
+                absentDateKey: absentDateKey,
+                in: app
+            ) {
+                return
+            }
+            attempt += 1
+        }
+        XCTFail(title + " で、タイトルと行が揃いません")
+    }
+
+    /// 外からの月移動のあと、タイトルと行が別の月になっていないことを見る。
+    private func jumpMonthConsistently(
+        title: String,
+        rowDateKey: String,
+        absentDateKey: String,
+        in app: XCUIApplication
+    ) {
+        let jump = app.descendants(matching: .any)["debugJumpMonth"].firstMatch
+        XCTAssertTrue(jump.waitForExistence(timeout: 5), "外部からの月移動がありません")
+        var attempt = 0
+        while attempt < 2 {
+            waitUntilHittable(jump, message: "外部からの月移動を押せません")
+            jump.tap()
+            if waitUntilMonthIsConsistent(
+                title: title,
+                rowDateKey: rowDateKey,
+                absentDateKey: absentDateKey,
+                in: app
+            ) {
+                return
+            }
+            attempt += 1
+        }
+        XCTFail(title + " で、タイトルと行が揃いません")
+    }
+
+    /// 移り終わるまで、タイトルの月と出ている行の月が食い違ったら失敗にする。
+    private func waitUntilMonthIsConsistent(
+        title: String,
+        rowDateKey: String,
+        absentDateKey: String,
+        in app: XCUIApplication
+    ) -> Bool {
+        let titleElement = app.descendants(matching: .any)["monthlyTitle"]
+        let row = app.descendants(matching: .any)["monthlyLogRow-" + rowDateKey]
+        let absent = app.descendants(matching: .any)["monthlyLogRow-" + absentDateKey]
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            let label = titleElement.label
+            if row.exists && label != title {
+                XCTFail("行は " + rowDateKey + " なのにタイトルは " + label)
+                return false
+            }
+            if label == title && absent.exists {
+                XCTFail("タイトルは " + title + " なのに " + absentDateKey + " の行が出ています")
+                return false
+            }
+            if label == title && row.exists && absent.exists == false {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return false
     }
 
     /// 外からの月移動。キーボードが最初のタップを取るときは、印が出るまでもう一度押す。

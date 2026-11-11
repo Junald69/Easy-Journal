@@ -16,7 +16,7 @@ import SwiftUI
 /// `-openPage` の文字列が読めたときは、そのページを最初のページにする。
 /// 無いか、読めないときは、いまの月の記録（Monthly Log）のまま。
 /// 開いている月は、起動のときに決める。日付が変わっても月は動かさない。
-/// ◀▶ と、外からの月の依頼は、移動できたときだけ開いている月を変える。
+/// ◀▶ と、外からの月の依頼と、月の画面を出る開き方は、確認と保存ができたときだけページを変える。
 /// `-todayKey` は、Debug かつ `-inMemoryStore` のときだけ、「今日」を固定する。
 /// 今日の日付キーは、起動時だけでなく、画面に戻ったときと、日やタイムゾーンが変わったときにも計算し直す。
 @main
@@ -31,6 +31,8 @@ struct EasyJournalApp: App {
     private let monthMoveFailure: MonthMoveFailureInjection?
     /// Debug かつメモリ上の保存先のときだけ、◀▶ と同じ確認を通して開く月。
     private let debugJumpMonth: String?
+    /// Debug かつメモリ上の保存先のときだけ、確認を通して開く URL。
+    private let debugOpenURL: URL?
     /// 今日の日付キー。月の画面に渡す。同じ日なら書き換えない。
     @State private var todayKey: String
     /// 今どのページを開いているか。成功の画面だけに渡す。
@@ -68,6 +70,11 @@ struct EasyJournalApp: App {
             inMemoryStore: options.inMemoryStore,
             isDebugBuild: EasyJournalApp.debugBuild
         )
+        debugOpenURL = MonthMoveDebugOpen.url(
+            argument: options.debugOpenURL,
+            inMemoryStore: options.inMemoryStore,
+            isDebugBuild: EasyJournalApp.debugBuild
+        )
         do {
             let container = try StorageLocation.makeContainer(inMemory: options.inMemoryStore)
             modelContainer = container
@@ -101,7 +108,8 @@ struct EasyJournalApp: App {
                         router: router,
                         todayKey: todayKey,
                         monthMoveFailure: monthMoveFailure,
-                        debugJumpMonth: debugJumpMonth
+                        debugJumpMonth: debugJumpMonth,
+                        debugOpenURL: debugOpenURL
                     )
                         .modelContainer(modelContainer)
                 } else {

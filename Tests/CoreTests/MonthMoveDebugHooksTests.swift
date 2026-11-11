@@ -96,4 +96,43 @@ final class MonthMoveDebugHooksTests: XCTestCase {
             )
         )
     }
+
+    func testDebugOpenURLRequiresTheAppSchemeAndInMemoryStore() throws {
+        let tracker = try XCTUnwrap(
+            MonthMoveDebugOpen.url(
+                argument: "easyjournal://tracker/2026-10",
+                inMemoryStore: true,
+                isDebugBuild: true
+            )
+        )
+        XCTAssertEqual(tracker.absoluteString, "easyjournal://tracker/2026-10")
+        XCTAssertNil(
+            MonthMoveDebugOpen.url(
+                argument: "https://example.com",
+                inMemoryStore: true,
+                isDebugBuild: true
+            )
+        )
+        XCTAssertNil(
+            MonthMoveDebugOpen.url(
+                argument: "easyjournal://daily/2026-10-27",
+                inMemoryStore: false,
+                isDebugBuild: true
+            )
+        )
+        XCTAssertNil(
+            MonthMoveDebugOpen.url(
+                argument: "easyjournal://daily/2026-10-27",
+                inMemoryStore: true,
+                isDebugBuild: false
+            )
+        )
+        XCTAssertNil(
+            MonthMoveDebugOpen.url(
+                argument: nil,
+                inMemoryStore: true,
+                isDebugBuild: true
+            )
+        )
+    }
 }

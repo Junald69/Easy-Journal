@@ -26,6 +26,10 @@ struct LaunchOptions {
     /// 月キー。使うかは、アプリの起動側が決める。
     let debugJumpMonth: String?
 
+    /// `-debugOpenURL` の次に書かれた文字列。無ければ nil。
+    /// `easyjournal://` の住所。使うかは、アプリの起動側が決める。
+    let debugOpenURL: String?
+
     /// `ProcessInfo.processInfo.arguments` から読む。
     init(arguments: [String] = ProcessInfo.processInfo.arguments) {
         var sampleData = false
@@ -34,6 +38,7 @@ struct LaunchOptions {
         var todayKey: String?
         var failMonthMove: String?
         var debugJumpMonth: String?
+        var debugOpenURL: String?
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
@@ -65,6 +70,12 @@ struct LaunchOptions {
                     debugJumpMonth = arguments[valueIndex]
                     index = valueIndex
                 }
+            } else if argument == "-debugOpenURL" {
+                let valueIndex = index + 1
+                if valueIndex < arguments.count {
+                    debugOpenURL = arguments[valueIndex]
+                    index = valueIndex
+                }
             }
             index += 1
         }
@@ -74,5 +85,6 @@ struct LaunchOptions {
         self.todayKey = todayKey
         self.failMonthMove = failMonthMove
         self.debugJumpMonth = debugJumpMonth
+        self.debugOpenURL = debugOpenURL
     }
 }

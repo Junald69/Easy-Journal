@@ -292,3 +292,22 @@ enum MonthMoveRule {
         return moved
     }
 }
+
+/// タイトルと一覧が共有する、いま画面に出している月。
+///
+/// 月と中身は、この値を丸ごと入れ替えたときだけ一緒に変わる。
+/// 中身だけを先に入れ替えない。タイトルだけを先に変えない。
+struct MonthDisplayState: Equatable {
+    var monthKey: String
+    var textByDateKey: [String: String]
+    var dailyDateKeys: Set<String>
+
+    /// 移る先の月と、その中身を、1つの値にする。元の値は変えない。
+    func replaced(with content: MonthlyLogContent, monthKey: String) -> MonthDisplayState {
+        MonthDisplayState(
+            monthKey: monthKey,
+            textByDateKey: content.textByDateKey,
+            dailyDateKeys: content.dailyDateKeys
+        )
+    }
+}

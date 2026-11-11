@@ -8,8 +8,8 @@ import SwiftUI
 /// 編集を始めたときの文字は別に覚える。読み直しが失敗して表示が空でも、その文字で確認する。
 /// 日付の数字と曜日は、この画面では何もしない。
 /// ☰ と +Daily は、まだ動かない。押しても何もしない。
-/// ◀ で前の月、▶ で次の月。外からの月移動も、同じ順で頼むだけ。
-/// 開いている月は Router から渡された `monthKey` だけ。
+/// ◀ で前の月、▶ で次の月。外からの月移動も、日のページや習慣表を開くときも、同じ順で頼むだけ。
+/// 画面に出している月は、タイトルと一覧で1つの値を共有する。移る先の中身は、その値を変えるまで出さない。
 /// 移る前に、編集中の1行は今までと同じ保存ルールで片付ける。失敗したら Router は変えない。
 /// タスク欄に未確定の文字があるときは、1行の保存や編集終了より前に止める。
 /// 月が移れたときだけ、その月のページを探す。無ければ作る。同じ月は増やさない。
@@ -23,12 +23,18 @@ struct MonthlyLogPageView: View {
     let todayKey: String
     /// 移れたときだけ呼ぶ。保存と読み込みが成功したあとで、Router の月を変える。
     ///
-    /// 2つ目の値は、この移動が成功したときだけ作る。画面の外では作れない。
-    let openMonth: (String, MonthMoveAuthorization) -> Void
+    /// 2つ目は、外からの依頼番号。◀▶ のときは nil。
+    /// 3つ目は、この移動が成功したときだけ作る。画面の外では作れない。
+    /// 変わったときだけ true。
+    let openMonth: (String, Int?, MonthMoveAuthorization) -> Bool
     /// 外から「この月を開いて」と頼まれた印。無いときは nil。表示月は、これだけでは変えない。
     var monthRequest: MonthNavigationRequest? = nil
     /// 依頼を見た。成功でも失敗でも、同じ依頼ではもう一度動かさない。
     var acknowledgeMonthRequest: () -> Void = {}
+    /// 日のページや習慣表を開く依頼。無いときは nil。ページは、これだけでは変えない。
+    var pageLeaveRequest: PageLeaveRequest? = nil
+    /// 出る確認の結果を Router に返す。通過してページが変わったときだけ true。
+    var resolvePageLeave: (PageRef, Int, GuardedOpenResolution) -> Bool = { _, _, _ in false }
     /// Debug かつメモリ上の保存先のときだけ、次の移動を1回失敗させる。
     var monthMoveFailure: MonthMoveFailureInjection? = nil
 
@@ -36,12 +42,10 @@ struct MonthlyLogPageView: View {
     /// アプリが前面から離れたときに、編集中の行を確定する。
     @Environment(\.scenePhase) private var scenePhase
 
-    /// 保存先から読んだ、その月の1行。編集中の下書きとは別。
-    @State private var textByDateKey: [String: String] = [:]
-    /// 中身のある Daily がある日。
-    @State private var dailyDateKeys: Set<String> = []
-    /// その月のタスク。読み直しのときに入れる。編集中の下書きとは別。
-    @State private var tasks: [MonthlyTaskItem] = []
+    /// タイトルと一覧とタスクが共有する、いま出している月。中身だけ先には変えない。
+    @State private var shown = ShownMonth.empty(monthKey: "")
+    /// 遅れた移動を、画面が閉じたあとに実行しないための番号。
+    @State private var moveCommitGate = MoveCommitGate()
     /// 読み出しに失敗したとき true。
     @State private var loadFailed = false
     /// 保存に失敗したとき true。成功したら false。
@@ -90,9 +94,26 @@ struct MonthlyLogPageView: View {
     /// 止めた案内へ、読み上げの焦点を移す。
     @AccessibilityFocusState private var taskDraftBlockFocused: Bool
 
-    /// いま画面に出している月。Router から渡された月だけ。
+    /// いま画面に出している月。タイトルも一覧も、この値だけを見る。
+    ///
+    /// まだ読み込む前だけ、Router の月を使う。読み込んだあとは `shown` だけ。
     private var displayedMonthKey: String {
-        monthKey
+        if shown.display.monthKey.isEmpty {
+            return monthKey
+        }
+        return shown.display.monthKey
+    }
+
+    private var textByDateKey: [String: String] {
+        shown.display.textByDateKey
+    }
+
+    private var dailyDateKeys: Set<String> {
+        shown.display.dailyDateKeys
+    }
+
+    private var tasks: [MonthlyTaskItem] {
+        shown.tasks
     }
 
     /// タスク欄が理由で止めていて、未確定の文字がまだあるときだけ案内を出す。
@@ -184,8 +205,15 @@ struct MonthlyLogPageView: View {
         .onAppear {
             reload()
         }
+        .onDisappear {
+            // 画面が消えたあとの遅れた移動は、ページを変えない。
+            moveCommitGate.invalidatePending()
+        }
         .onChange(of: monthRequest, initial: true) { _, request in
             handleMonthRequest(request)
+        }
+        .onChange(of: pageLeaveRequest, initial: true) { _, request in
+            handlePageLeaveRequest(request)
         }
         .onChange(of: editingDateKey) { _, newKey in
             if newKey == nil {
@@ -695,7 +723,7 @@ struct MonthlyLogPageView: View {
         ) else {
             return
         }
-        move(to: destination)
+        startGuardedNavigation(.month(destination, requestToken: nil))
     }
 
     /// 外から頼まれた月。◀▶ と同じ手順。依頼は、見る前に片付ける。
@@ -709,6 +737,7 @@ struct MonthlyLogPageView: View {
             acknowledgeMonthRequest()
             return
         }
+        let token = request.token
         acknowledgeMonthRequest()
         if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
             // 確認が出ている。依頼は見たので繰り返さない。黙っては捨てない。
@@ -716,26 +745,42 @@ struct MonthlyLogPageView: View {
             monthMoveBlockedByOpenConfirm = true
             return
         }
-        move(to: request.monthKey)
+        startGuardedNavigation(.month(request.monthKey, requestToken: token))
     }
 
-    /// ◀▶ も外からの依頼も、ここだけを通る。判定の順は `MonthMoveRule.result` と同じ。
+    /// 日のページや習慣表を開く依頼。月を移るときと同じ順で片付ける。
     ///
-    /// 確認が出ているあいだは、何もしない。
-    /// 同じ月なら、保存もページ作成もしない。
-    /// 空にして消す下書きは、確認を出して止める。確認なしでは消さない。
-    /// タスク欄の未確定は、1行の保存や編集終了より前に見る。止めたときは、両方の下書きを残す。
-    /// 1行の保存、またはそのあとの読み込みに失敗したら、入力を残して Router は変えない。
-    /// 移れるときだけ、移る先の月ページを探す。無ければ作る。読めなければ Router は変えない。
-    private func move(to destination: String) {
+    /// 通るまでページは変えない。止めたとき、保存に失敗したときは、下書きを残す。
+    private func handlePageLeaveRequest(_ request: PageLeaveRequest?) {
+        guard let request else {
+            return
+        }
         if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
+            deleteConfirmFromMonthMove = pendingDeleteDateKey != nil
+            monthMoveBlockedByOpenConfirm = true
+            _ = resolvePageLeave(request.destination, request.token, .blocked)
             return
         }
-        guard DateKey.isValidMonthKey(destination) else {
+        startGuardedNavigation(.leave(request))
+    }
+
+    /// ◀▶ も、外からの月も、月の画面を出る開き方も、ここだけを通る。
+    ///
+    /// 判定の順は `MonthMoveRule.phaseBeforeSideEffects` と同じ。
+    /// 削除の確認、タスク欄の未確定、一言日記の保存。確認なしでは消さない。
+    /// 保存に失敗したら、ページは変えず下書きを残す。
+    private func startGuardedNavigation(_ navigation: GuardedNavigation) {
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
+            stopPageLeave(navigation, resolution: .blocked)
             return
         }
-        if destination == displayedMonthKey {
-            return
+        if case .month(let destination, _) = navigation {
+            guard DateKey.isValidMonthKey(destination) else {
+                return
+            }
+            if destination == displayedMonthKey {
+                return
+            }
         }
         let needsDelete: Bool
         if let current = editingDateKey {
@@ -754,25 +799,27 @@ struct MonthlyLogPageView: View {
                 deleteConfirmFromMonthMove = true
                 pendingDeleteDateKey = current
             }
-            return
+            stopPageLeave(navigation, resolution: .blocked)
         case .keepTaskDraft:
             blockMoveForTaskDraft()
-            return
+            stopPageLeave(navigation, resolution: .blocked)
         case .prepareDestination:
-            prepareAndMove(to: destination)
+            continueAfterLogIsReady(navigation)
         case .saveLog:
-            saveLogThenContinueMove(to: destination)
+            saveLogThenContinue(navigation)
         }
     }
 
     /// 編集中の1行を、編集を始めた日付へ保存してから、移動を続けるか止めるかを決める。
     ///
-    /// 保存に失敗したとき、読み込みに失敗したときは、下書きを残して止める。Router は変えない。
-    private func saveLogThenContinueMove(to destination: String) {
+    /// 保存に失敗したとき、読み込みに失敗したときは、下書きを残して止める。ページは変えない。
+    private func saveLogThenContinue(_ navigation: GuardedNavigation) {
         guard let current = editingDateKey else {
+            stopPageLeave(navigation, resolution: .failed)
             return
         }
         guard let target = MonthMoveRule.logSaveDateKey(editingDateKey: current) else {
+            stopPageLeave(navigation, resolution: .failed)
             return
         }
         isMovingEdit = true
@@ -784,10 +831,29 @@ struct MonthlyLogPageView: View {
         )
         if MonthMoveRule.mayDiscardLogDraft(after) {
             closeLogEditorAfterSuccessfulSave()
-            prepareAndMove(to: destination)
+            continueAfterLogIsReady(navigation)
         } else {
             keepLogEditor(on: current)
+            stopPageLeave(navigation, resolution: .failed)
         }
+    }
+
+    /// 一言日記を片付けたあと。月なら移る先を用意し、それ以外ならページを変える。
+    private func continueAfterLogIsReady(_ navigation: GuardedNavigation) {
+        switch navigation {
+        case .month(let destination, let requestToken):
+            prepareAndMove(to: destination, requestToken: requestToken)
+        case .leave(let request):
+            schedulePageLeave(request)
+        }
+    }
+
+    /// 出る依頼を、止めたときと失敗したときに片付ける。月の移動では何もしない。
+    private func stopPageLeave(_ navigation: GuardedNavigation, resolution: GuardedOpenResolution) {
+        guard case .leave(let request) = navigation else {
+            return
+        }
+        _ = resolvePageLeave(request.destination, request.token, resolution)
     }
 
     /// タスク欄の未確定で月を止める。1行は保存しない。編集も閉じない。入力も残す。
@@ -824,7 +890,7 @@ struct MonthlyLogPageView: View {
     /// 保存に失敗したら「保存できませんでした」。今の月のまま。前の読み込み失敗は消す。
     /// 読めなかったら「記録を読み込めませんでした」。今の月の行と入力は残す。前の保存失敗は消す。
     /// エラーを消すためだけに、ページを作ったり消したりはしない。
-    private func prepareAndMove(to destination: String) {
+    private func prepareAndMove(to destination: String, requestToken: Int?) {
         if let injection = consumePageFailureInjection() {
             switch injection {
             case .save:
@@ -868,36 +934,93 @@ struct MonthlyLogPageView: View {
             recordMoveProblem(problem)
             return
         }
-        applyDestination(content, tasks: storedTasks, monthKey: destination)
+        applyDestination(
+            content,
+            tasks: storedTasks,
+            monthKey: destination,
+            requestToken: requestToken
+        )
     }
 
-    /// 移れたときだけ、前の月の編集状態を捨てて、移る先の中身を出してから Router を変える。
+    /// 移れたときだけ、焦点を先に外し、次の更新でタイトルと中身と Router を一緒に変える。
     ///
-    /// 中身を先に覚える。Router を変えたあとに、もう一度は読まない。
-    /// タスク欄の未確定の文字は、ここに来る前に無い。空白だけなら、ここで閉じる。
+    /// 中身は、その更新まで今の月のまま出す。タイトルと行が別の月になる隙間を作らない。
+    /// 焦点を外す更新と、月の入れ物を作り直す更新は分けたままにする。同じ更新で行うと、
+    /// キーボードを閉じる動きが終わらず、次の操作が長時間待つ。
+    /// 名前欄も、焦点が乗ったままでは消さない。
+    /// 画面が消えたあとは、番号が合わないので Router を変えない。
     private func applyDestination(
         _ content: MonthlyLogContent,
         tasks storedTasks: [JournalTask],
-        monthKey destination: String
+        monthKey destination: String,
+        requestToken: Int?
     ) {
-        clearMonthEditState()
-        textByDateKey = content.textByDateKey
-        dailyDateKeys = content.dailyDateKeys
-        tasks = storedTasks.map { task in
+        isMovingEdit = true
+        editFocusLanded = false
+        editorFocus = nil
+        let gate = moveCommitGate
+        let ticket = gate.issue()
+        let authorization = MonthMoveAuthorization.forSuccessfulMove(
+            monthKey: destination,
+            requestToken: requestToken
+        )
+        let commitMonth = openMonth
+        let nextTasks = storedTasks.map { task in
             MonthlyTaskItem(task: task)
         }
-        loadFailed = false
-        saveFailed = false
-        moveProblem = .none
-        let authorization = MonthMoveAuthorization.forSuccessfulMove()
-        let commitMonth = openMonth
-        // 焦点を外したあとに月の入れ物を作り直す。同じ更新で行うと、
-        // キーボードを閉じる動きが終わらず、次の操作が長時間待つ。
         DispatchQueue.main.async {
+            guard gate.allows(ticket) else {
+                return
+            }
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                commitMonth(destination, authorization)
+                let committed = commitMonth(destination, requestToken, authorization)
+                guard committed else {
+                    isMovingEdit = false
+                    if editingDateKey != nil {
+                        editFocusLanded = true
+                    }
+                    return
+                }
+                shown = ShownMonth(
+                    display: shown.display.replaced(with: content, monthKey: destination),
+                    tasks: nextTasks
+                )
+                loadFailed = false
+                saveFailed = false
+                moveProblem = .none
+                clearMonthEditState()
+            }
+        }
+    }
+
+    /// 日のページや習慣表へ出る。焦点を外してから、次の更新でページを変える。
+    ///
+    /// 画面が消えたあとは変えない。保存に失敗した経路は、ここまで来ない。
+    private func schedulePageLeave(_ request: PageLeaveRequest) {
+        isMovingEdit = true
+        editFocusLanded = false
+        editorFocus = nil
+        let gate = moveCommitGate
+        let ticket = gate.issue()
+        let authorization = PageLeaveAuthorization.forSuccessfulLeave(
+            destination: request.destination,
+            requestToken: request.token
+        )
+        let resolve = resolvePageLeave
+        let destination = request.destination
+        let token = request.token
+        DispatchQueue.main.async {
+            guard gate.allows(ticket) else {
+                return
+            }
+            let moved = resolve(destination, token, .passed(authorization))
+            if moved == false {
+                isMovingEdit = false
+                if editingDateKey != nil {
+                    editFocusLanded = true
+                }
             }
         }
     }
@@ -1054,16 +1177,19 @@ struct MonthlyLogPageView: View {
         do {
             let content = try store.monthlyLogContent(monthKey: month)
             let storedTasks = try store.monthlyTasks(monthKey: month)
-            textByDateKey = content.textByDateKey
-            dailyDateKeys = content.dailyDateKeys
-            tasks = storedTasks.map { task in
-                MonthlyTaskItem(task: task)
-            }
+            shown = ShownMonth(
+                display: MonthDisplayState(
+                    monthKey: month,
+                    textByDateKey: content.textByDateKey,
+                    dailyDateKeys: content.dailyDateKeys
+                ),
+                tasks: storedTasks.map { task in
+                    MonthlyTaskItem(task: task)
+                }
+            )
             loadFailed = false
         } catch {
-            textByDateKey = [:]
-            dailyDateKeys = []
-            tasks = []
+            shown = .empty(monthKey: month)
             loadFailed = true
         }
     }
@@ -1290,26 +1416,161 @@ struct MonthlyLogPageView: View {
 
 /// 月の移動が成功したときだけ作れる値。これがない `commitDisplayedMonth` は、表示月を変えない。
 ///
-/// 作れるのは、このファイルの移動処理だけ。画面の外は `rejected` しか持てない。
+/// 作れるのは、このファイルの移動処理だけ。初期化は外に出さない。
+/// 移る先の月に結び付く。外からの依頼なら、その番号にも結び付く。
+/// 1回の移動で使い切る。同じ値の再使用と、別の月への使用は、月を変えない。
 struct MonthMoveAuthorization: Equatable {
     private let nonce: UUID
+    private let monthKey: String
+    private let requestToken: Int?
 
-    private init(nonce: UUID) {
+    private init(nonce: UUID, monthKey: String, requestToken: Int?) {
         self.nonce = nonce
+        self.monthKey = monthKey
+        self.requestToken = requestToken
     }
 
     /// 確認と保存と読み込みが終わった移動だけが呼ぶ。
-    fileprivate static func forSuccessfulMove() -> MonthMoveAuthorization {
-        MonthMoveAuthorization(nonce: UUID())
+    fileprivate static func forSuccessfulMove(
+        monthKey: String,
+        requestToken: Int?
+    ) -> MonthMoveAuthorization {
+        MonthMoveAuthorization(nonce: UUID(), monthKey: monthKey, requestToken: requestToken)
     }
 
     /// 承諾には使えない。画面の外から渡しても、月は変わらない。
     static let rejected = MonthMoveAuthorization(
-        nonce: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        nonce: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+        monthKey: "",
+        requestToken: nil
     )
 
+    /// 拒否用の値でないとき true。使い切りと、月が一致するかは、ここでは見ない。
     var isAccepted: Bool {
         nonce != MonthMoveAuthorization.rejected.nonce
+    }
+
+    /// この月と依頼番号に一致し、まだ台帳に無いときだけ true。一致したときだけ台帳に入れる。
+    func claim(monthKey: String, requestToken: Int?, ledger: inout Set<UUID>) -> Bool {
+        guard nonce != MonthMoveAuthorization.rejected.nonce else {
+            return false
+        }
+        guard self.monthKey == monthKey else {
+            return false
+        }
+        guard self.requestToken == requestToken else {
+            return false
+        }
+        guard ledger.contains(nonce) == false else {
+            return false
+        }
+        ledger.insert(nonce)
+        return true
+    }
+}
+
+/// 月の画面を出て、日のページや習慣表を開くときだけ作れる値。
+///
+/// 作れるのは、このファイルの移動処理だけ。行き先と依頼番号に結び付き、1回で使い切る。
+struct PageLeaveAuthorization: Equatable {
+    private let nonce: UUID
+    private let destination: PageRef
+    private let requestToken: Int
+
+    private init(nonce: UUID, destination: PageRef, requestToken: Int) {
+        self.nonce = nonce
+        self.destination = destination
+        self.requestToken = requestToken
+    }
+
+    /// 確認と保存が終わった、月の画面を出る移動だけが呼ぶ。
+    fileprivate static func forSuccessfulLeave(
+        destination: PageRef,
+        requestToken: Int
+    ) -> PageLeaveAuthorization {
+        PageLeaveAuthorization(nonce: UUID(), destination: destination, requestToken: requestToken)
+    }
+
+    /// 承諾には使えない。渡しても、ページは変わらない。
+    static let rejected = PageLeaveAuthorization(
+        nonce: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+        destination: .daily(dateKey: "1970-01-01"),
+        requestToken: -1
+    )
+
+    /// この行き先と依頼番号に一致し、まだ台帳に無いときだけ true。一致したときだけ台帳に入れる。
+    func claim(destination: PageRef, requestToken: Int, ledger: inout Set<UUID>) -> Bool {
+        guard nonce != PageLeaveAuthorization.rejected.nonce else {
+            return false
+        }
+        guard self.destination == destination else {
+            return false
+        }
+        guard self.requestToken == requestToken else {
+            return false
+        }
+        guard ledger.contains(nonce) == false else {
+            return false
+        }
+        ledger.insert(nonce)
+        return true
+    }
+}
+
+#if DEBUG
+extension MonthMoveAuthorization {
+    /// テストだけが使う。画面の移動は `forSuccessfulMove` を使う。
+    static func makeForTests(monthKey: String, requestToken: Int?) -> MonthMoveAuthorization {
+        forSuccessfulMove(monthKey: monthKey, requestToken: requestToken)
+    }
+}
+
+extension PageLeaveAuthorization {
+    /// テストだけが使う。画面の移動は `forSuccessfulLeave` を使う。
+    static func makeForTests(destination: PageRef, requestToken: Int) -> PageLeaveAuthorization {
+        forSuccessfulLeave(destination: destination, requestToken: requestToken)
+    }
+}
+#endif
+
+/// タイトル、一覧、タスクを一度に入れ替える単位。
+private struct ShownMonth: Equatable {
+    var display: MonthDisplayState
+    var tasks: [MonthlyTaskItem]
+
+    static func empty(monthKey: String) -> ShownMonth {
+        ShownMonth(
+            display: MonthDisplayState(
+                monthKey: monthKey,
+                textByDateKey: [:],
+                dailyDateKeys: []
+            ),
+            tasks: []
+        )
+    }
+}
+
+/// ◀▶、外からの月、月の画面を出る開き方。判定の入口は1つ。
+private enum GuardedNavigation {
+    case month(String, requestToken: Int?)
+    case leave(PageLeaveRequest)
+}
+
+/// 遅れた移動が、画面が閉じたあとに走らないようにする番号。
+private final class MoveCommitGate {
+    private var current = 0
+
+    func issue() -> Int {
+        current += 1
+        return current
+    }
+
+    func allows(_ ticket: Int) -> Bool {
+        ticket == current && ticket != 0
+    }
+
+    func invalidatePending() {
+        current += 1
     }
 }
 
