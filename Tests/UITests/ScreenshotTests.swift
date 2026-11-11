@@ -620,8 +620,7 @@ final class ScreenshotTests: XCTestCase {
         let app = launchMonthly(includeSampleData: false)
         waitForMonthlyLog(app)
 
-        let field = openMonthlyField(app, dateKey: dateKey)
-        field.typeText("FocusLog")
+        // ＋ を先に押す。日記を開いたまま ＋ を押すと、その日記は保存されて閉じる。
         let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
         revealMonthlyTask(addButton, in: app)
         waitUntilHittable(addButton, message: "タスクの追加を押せません")
@@ -631,13 +630,22 @@ final class ScreenshotTests: XCTestCase {
         taskField.tap()
         taskField.typeText("Temp")
 
+        let field = openMonthlyField(app, dateKey: dateKey)
+        field.typeText("FocusLog")
         tapMonthButton("monthlyNextButton", in: app)
         tapMonthButton("monthlyNextButton", in: app)
         let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "止めた時点で一言日記の編集欄が閉じました")
 
         clearTaskTitle(taskField, knownText: "Temp", app: app)
-        let logField = revealLogEditor(app, dateKey: dateKey)
+        let logField = app.descendants(matching: .textField)["monthlyLogText-" + dateKey]
+        var scrolls = 0
+        while logField.exists == false && scrolls < 3 {
+            app.swipeDown()
+            scrolls += 1
+        }
+        XCTAssertTrue(logField.waitForExistence(timeout: 5), dateKey + " の編集欄がありません")
         let logStill = logField.value as? String ?? ""
         XCTAssertTrue(logStill.contains("FocusLog"), "一言日記の編集欄が閉じました: " + logStill)
 
@@ -938,14 +946,10 @@ final class ScreenshotTests: XCTestCase {
             if isClearedTaskTitle(shown) && attempt > 0 {
                 break
             }
-            var deleteCount = shown.count
             if shown == "タスク" {
                 break
             }
-            if deleteCount < knownText.count {
-                deleteCount = knownText.count
-            }
-            deleteCount += 2
+            let deleteCount = knownText.count
             let endOfField = field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5))
             endOfField.tap()
             let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue, count: deleteCount)
@@ -966,25 +970,6 @@ final class ScreenshotTests: XCTestCase {
             return true
         }
         return false
-    }
-
-    /// 一言日記の編集欄を探す。キーボードやタスク欄のうしろにいるときは、見えるまでずらす。
-    private func revealLogEditor(_ app: XCUIApplication, dateKey: String) -> XCUIElement {
-        let field = app.descendants(matching: .textField)["monthlyLogText-" + dateKey]
-        var attempt = 0
-        while field.exists == false && attempt < 4 {
-            if attempt % 2 == 0 {
-                app.swipeUp()
-            } else {
-                app.swipeDown()
-            }
-            attempt += 1
-        }
-        XCTAssertTrue(
-            field.waitForExistence(timeout: 5),
-            dateKey + " の編集欄がありません"
-        )
-        return field
     }
 
     /// 編集欄の文字を、末尾から delete キーだけで消す。空になったら終わる。
