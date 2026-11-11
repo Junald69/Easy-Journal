@@ -197,9 +197,13 @@ struct MonthlyTaskSection: View {
                     .focused(editorFocus, equals: .taskTitle)
                     .disabled(logEditActive && focusTaskTitleDespiteLogEdit == false)
                     .onChange(of: focusTaskTitleDespiteLogEdit) { _, forced in
-                        // 止めていた入力を消すと、名前欄は無効のまま焦点を残しやすい。
-                        // 一言日記を編集中なら、その欄へ焦点を戻す。
-                        if forced == false, let dateKey = editingLogDateKey {
+                        // 止めていた入力を消すと、名前欄は無効になる。
+                        // 同じ更新で焦点を移すと、無効な欄に残るか、一度乗った一言日記が
+                        // 焦点を失って保存・終了してしまう。更新のあとで戻す。
+                        guard forced == false, let dateKey = editingLogDateKey else {
+                            return
+                        }
+                        DispatchQueue.main.async {
                             editorFocus.wrappedValue = .log(dateKey)
                         }
                     }

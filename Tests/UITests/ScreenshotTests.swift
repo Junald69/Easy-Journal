@@ -636,17 +636,12 @@ final class ScreenshotTests: XCTestCase {
         let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
 
-        var deleted = 0
-        while deleted < 8 {
-            let shown = taskField.value as? String ?? ""
-            if shown.contains("Temp") == false {
-                break
-            }
-            taskField.typeText(XCUIKeyboardKey.delete.rawValue)
-            deleted += 1
-        }
+        // 1回で消す。1文字ずつ消すと、焦点が戻った一言日記の欄まで消える。
+        taskField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Temp".count))
         let taskAfter = taskField.value as? String ?? ""
         XCTAssertFalse(taskAfter.contains("Temp"), "タスク名が残っています: " + taskAfter)
+        let logStill = field.value as? String ?? ""
+        XCTAssertTrue(logStill.contains("FocusLog"), "一言日記の編集欄が閉じました: " + logStill)
 
         let focused = NSPredicate(format: "hasKeyboardFocus == true")
         let ready = XCTNSPredicateExpectation(predicate: focused, object: field)
