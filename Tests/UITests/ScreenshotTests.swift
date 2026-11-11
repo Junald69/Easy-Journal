@@ -134,13 +134,12 @@ final class ScreenshotTests: XCTestCase {
         let app = launchMonthly()
         waitForMonthlyLog(app)
 
-        let symbol = monthlyTaskButton(taskLabel, in: app)
-        XCTAssertTrue(symbol.waitForExistence(timeout: 10), "タスクの記号がありません")
-
         let field = openMonthlyField(app, dateKey: dateKey)
         deleteAllCharacters(in: field, knownText: original, app: app)
 
-        revealMonthlyTask(symbol, in: app)
+        // キーボードは開いたまま。ページのスクロールだけを動かし、記号がキーボードより上に出てから押す。
+        // return や、欄の外のタップでは確定しない。下書きは空のまま残す。
+        let symbol = scrollMonthlyTaskSymbolAboveKeyboard(taskLabel, in: app)
         waitUntilHittable(symbol, message: "タスクの記号を押せません")
         symbol.tap()
 
@@ -484,6 +483,117 @@ final class ScreenshotTests: XCTestCase {
         let button = alert.buttons[title].firstMatch
         waitUntilHittable(button, message: title + " を押せません")
         button.tap()
+    }
+
+    /// ページのスクロールを動かし、タスクの記号が画面の中、かつキーボードより上に来るまで待つ。
+    ///
+    /// 文字欄や return は触らない。押せるかどうかは、枠が有効になるまで見ない。
+    /// 枠が無効な要素の isHittable は、それだけでテストが落ちる。
+    private func scrollMonthlyTaskSymbolAboveKeyboard(
+        _ label: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        let scroll = app.scrollViews.firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5), "月のスクロールがありません")
+        var attempt = 0
+        var lastPlacement = TaskSymbolPlacement.unknown
+        while attempt < 16 {
+            let symbol = monthlyTaskButton(label, in: app)
+            XCTAssertTrue(symbol.waitForExistence(timeout: 3), "タスクの記号がありません")
+            let placement = taskSymbolPlacement(symbol, in: app)
+            lastPlacement = placement
+            if placement == .aboveKeyboard {
+                return symbol
+            }
+            if placement == .tooHigh {
+                dragPageScroll(in: app, upward: false)
+            } else {
+                dragPageScroll(in: app, upward: true)
+            }
+            attempt += 1
+        }
+        XCTFail("タスクの記号をキーボードの上に出せませんでした: \(lastPlacement)")
+        return monthlyTaskButton(label, in: app)
+    }
+
+    /// 記号の枠が、画面の中でキーボードより上か。
+    private enum TaskSymbolPlacement {
+        case aboveKeyboard
+        case tooHigh
+        case tooLow
+        case unknown
+    }
+
+    private func taskSymbolPlacement(
+        _ element: XCUIElement,
+        in app: XCUIApplication
+    ) -> TaskSymbolPlacement {
+        let frame = element.frame
+        if frame.isNull || frame.isInfinite || frame.width < 2 || frame.height < 2 {
+            return .unknown
+        }
+        let window = app.frame
+        var visibleBottom = window.maxY
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists {
+            let kb = keyboard.frame
+            if kb.isNull == false && kb.isInfinite == false && kb.height > 1 && kb.minY.isFinite {
+                visibleBottom = min(visibleBottom, kb.minY)
+            }
+        }
+        if frame.maxY > visibleBottom - 2 {
+            return .tooLow
+        }
+        if frame.minY < window.minY + 1 {
+            return .tooHigh
+        }
+        if frame.minX > window.maxX || frame.maxX < window.minX {
+            return .unknown
+        }
+        return .aboveKeyboard
+    }
+
+    /// ページのスクロールを、文字欄でもキーボードの上でもない場所から滑らせる。
+    ///
+    /// upward が true のとき、下の方を見せる（指は上へ動く）。
+    private func dragPageScroll(in app: XCUIApplication, upward: Bool) {
+        let scroll = app.scrollViews.firstMatch
+        let scrollFrame = scroll.frame
+        var visibleBottom = scrollFrame.maxY
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists {
+            let kb = keyboard.frame
+            if kb.isNull == false && kb.height > 1 && kb.minY.isFinite {
+                visibleBottom = min(visibleBottom, kb.minY)
+            }
+        }
+        var bandTop = scrollFrame.minY + 8
+        let fields = app.textFields
+        if fields.count > 0 {
+            let field = fields.firstMatch
+            if field.exists {
+                let fieldFrame = field.frame
+                if fieldFrame.height > 1 && fieldFrame.maxY.isFinite {
+                    bandTop = max(bandTop, fieldFrame.maxY + 12)
+                }
+            }
+        }
+        let bandBottom = visibleBottom - 12
+        if bandBottom - bandTop < 36 {
+            return
+        }
+        let travel = min(160, (bandBottom - bandTop) * 0.55)
+        let x = scrollFrame.midX
+        let lowerY = bandBottom - 8
+        let upperY = max(bandTop + 8, lowerY - travel)
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let lower = origin.withOffset(CGVector(dx: x, dy: lowerY))
+        let upper = origin.withOffset(CGVector(dx: x, dy: upperY))
+        if upward {
+            lower.press(forDuration: 0.01, thenDragTo: upper)
+        } else {
+            upper.press(forDuration: 0.01, thenDragTo: lower)
+        }
     }
 
     /// 画面の外なら、上へ滑らせて見えるようにする。見えているときは滑らせない。
