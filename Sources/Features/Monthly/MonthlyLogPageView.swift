@@ -8,11 +8,12 @@ import SwiftUI
 /// 編集を始めたときの文字は別に覚える。読み直しが失敗して表示が空でも、その文字で確認する。
 /// 日付の数字と曜日は、この画面では何もしない。
 /// ☰ と +Daily は、まだ動かない。押しても何もしない。
-/// ◀ で前の月、▶ で次の月。開いている月は Router から渡された `monthKey` だけ。
+/// ◀ で前の月、▶ で次の月。外からの月移動も、同じ順で頼むだけ。
+/// 開いている月は Router から渡された `monthKey` だけ。
 /// 移る前に、編集中の1行は今までと同じ保存ルールで片付ける。失敗したら Router は変えない。
 /// タスク欄に未確定の文字があるときは、1行の保存や編集終了より前に止める。
 /// 月が移れたときだけ、その月のページを探す。無ければ作る。同じ月は増やさない。
-/// Router が先に月を変えたときは、下書きを書き始めた日付と月にだけ保存する。
+/// 成功するまで Router は変えない。下書きは、今の月のまま見える。
 /// 月のタスクの追加・記号・削除は、JournalStore だけを通す。画面から直接は足さない。
 /// 翌月への繰越、タスク名の編集、並べ替え、履歴の画面は、ここでは作らない。
 struct MonthlyLogPageView: View {
@@ -21,7 +22,13 @@ struct MonthlyLogPageView: View {
     /// 今日の日付キー（`yyyy-MM-dd`）。帯とスクロールに使う。
     let todayKey: String
     /// 移れたときだけ呼ぶ。保存と読み込みが成功したあとで、Router の月を変える。
-    let openMonth: (String) -> Void
+    ///
+    /// 2つ目の値は、この移動が成功したときだけ作る。画面の外では作れない。
+    let openMonth: (String, MonthMoveAuthorization) -> Void
+    /// 外から「この月を開いて」と頼まれた印。無いときは nil。表示月は、これだけでは変えない。
+    var monthRequest: MonthNavigationRequest? = nil
+    /// 依頼を見た。成功でも失敗でも、同じ依頼ではもう一度動かさない。
+    var acknowledgeMonthRequest: () -> Void = {}
     /// Debug かつメモリ上の保存先のときだけ、次の移動を1回失敗させる。
     var monthMoveFailure: MonthMoveFailureInjection? = nil
 
@@ -66,12 +73,14 @@ struct MonthlyLogPageView: View {
     @State private var taskDraftTitle = ""
     /// タスクを消す確認の対象。無いときは nil。キャンセルでは空に戻すだけ。
     @State private var pendingDeleteTask: PendingTaskDelete? = nil
-    /// いま中身を読んでいる月。Router の月と違うときは、まだ読み終わっていない。
-    @State private var loadedMonthKey = ""
-    /// タスク名を書き始めた月。追加の保存先は、開いている月が変わってもここ。
-    @State private var taskDraftMonthKey: String? = nil
     /// タスク欄が理由で月を止めたときだけ true。止めていないときは案内を出さない。
     @State private var taskDraftMoveBlocked = false
+    /// タスク欄で止めているあいだ、一言日記を閉じない印。閉じたら両方戻す。
+    @State private var logHold = LogEditorHoldState()
+    /// 月の移動が、空の行を消す確認を出したとき true。焦点が外れた確認とは分ける。
+    @State private var deleteConfirmFromMonthMove = false
+    /// 確認が出ているあいだに月の依頼が来たとき true。黙って捨てない。
+    @State private var monthMoveBlockedByOpenConfirm = false
     /// 移動の準備で出た失敗。成功したら `none`。保存と読み込みは同時には出さない。
     @State private var moveProblem: MonthMoveRule.MoveProblem = .none
     /// 新しい失敗と、前の失敗を区別するための番号。成功では増やさない。
@@ -138,6 +147,21 @@ struct MonthlyLogPageView: View {
                         .padding(DesignTokens.Spacing.s)
                         .accessibilityIdentifier("monthlySaveError")
                 }
+                if monthMoveBlockedByOpenConfirm {
+                    Text("確認を終えてから月を移動してください")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(DesignTokens.Spacing.s)
+                        .accessibilityIdentifier("monthlyMoveBlockedByConfirm")
+                }
+                if deleteConfirmFromMonthMove && pendingDeleteDateKey != nil {
+                    Text("月の移動の確認")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .opacity(0.01)
+                        .accessibilityIdentifier("monthlyLogDeleteFromMonthMove")
+                }
                 if showsTaskDraftBlockMessage {
                     Text(MonthMoveRule.taskDraftBlockMessage)
                         .font(DesignTokens.Fonts.subText)
@@ -158,17 +182,48 @@ struct MonthlyLogPageView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("monthlyLogScreen")
         .onAppear {
-            if loadedMonthKey.isEmpty {
-                loadedMonthKey = monthKey
-            }
             reload()
         }
-        .onChange(of: monthKey) { oldMonth, newMonth in
-            handleRouterMonthChange(from: oldMonth, to: newMonth)
+        .onChange(of: monthRequest, initial: true) { _, request in
+            handleMonthRequest(request)
+        }
+        .onChange(of: editingDateKey) { _, newKey in
+            if newKey == nil {
+                logHold.editingClosed()
+            }
+        }
+        .onChange(of: taskDraftMoveBlocked) { _, blocked in
+            if blocked == false {
+                logHold.taskBlockEnded()
+            }
+        }
+        .onChange(of: pendingDeleteDateKey) { _, newValue in
+            if newValue == nil {
+                deleteConfirmFromMonthMove = false
+                monthMoveBlockedByOpenConfirm = false
+            }
         }
         .onChange(of: taskDraftTitle) { _, newTitle in
-            if MonthMoveRule.hasUncommittedTaskDraft(newTitle) == false {
-                taskDraftMoveBlocked = false
+            guard MonthMoveRule.hasUncommittedTaskDraft(newTitle) == false else {
+                return
+            }
+            guard taskDraftMoveBlocked else {
+                return
+            }
+            taskDraftMoveBlocked = false
+            guard let current = editingDateKey else {
+                return
+            }
+            logHold.beginRestore(dateKey: current)
+            let dateKey = current
+            // 名前欄が無効になるのと同じ更新で焦点を移すと、無効な欄に残る。
+            // 1回だけ戻す。乗らなかったときに繰り返すと、画面が止まらなくなる。
+            DispatchQueue.main.async {
+                guard logHold.restoreLogFocusDateKey == dateKey else {
+                    return
+                }
+                editorFocus = .log(dateKey)
+                logHold.finishRestore(stillBlocked: taskDraftMoveBlocked)
             }
         }
         .onChange(of: moveFailureToken) { _, _ in
@@ -324,7 +379,7 @@ struct MonthlyLogPageView: View {
             isAdding: $isAddingTask,
             draftTitle: $taskDraftTitle,
             editorFocus: $editorFocus,
-            logEditActive: editingDateKey != nil,
+            editingLogDateKey: editingDateKey,
             focusTaskTitleDespiteLogEdit: taskDraftMoveBlocked,
             onBeginAdd: beginAddingTask,
             onActivateComposer: activateTaskComposer,
@@ -375,7 +430,11 @@ struct MonthlyLogPageView: View {
             }
         }
         if todayIsInThisMonth {
-            proxy.scrollTo(todayKey, anchor: .center)
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(todayKey, anchor: .center)
+            }
         }
     }
 
@@ -423,7 +482,13 @@ struct MonthlyLogPageView: View {
                     commitAndClose()
                 }
                 .onAppear {
-                    editorFocus = .log(row.dateKey)
+                    // タスク欄へ焦点を移しているあいだは、ここが奪い返さない。
+                    if taskDraftMoveBlocked {
+                        return
+                    }
+                    if editorFocus != .log(row.dateKey) {
+                        editorFocus = .log(row.dateKey)
+                    }
                 }
                 .frame(maxWidth: .infinity, minHeight: DesignTokens.gridSize, alignment: .leading)
                 .overlay(alignment: .bottom) {
@@ -531,6 +596,18 @@ struct MonthlyLogPageView: View {
     /// タスクの名前欄へ移ったときは、ここでは保存も確認も出さない。
     /// 文章がある行を空にするときは、保存せず確認を出す。
     private func handleFocusChange(oldFocus: MonthlyEditorFocus?, newFocus: MonthlyEditorFocus?) {
+        if logHold.restoreLogFocusDateKey != nil {
+            // 戻すあいだの空振りでは保存しない。焦点の入れ直しは、上の1回だけ。
+            if let dateKey = logHold.restoreLogFocusDateKey, newFocus == .log(dateKey) {
+                editFocusLanded = true
+                isMovingEdit = false
+            }
+            return
+        }
+        if logHold.holdLogEditor || taskDraftMoveBlocked {
+            // 止めているあいだ、タスク欄へ焦点が移っても一言日記は閉じない。
+            return
+        }
         if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
             return
         }
@@ -574,6 +651,12 @@ struct MonthlyLogPageView: View {
         case .save:
             break
         }
+        // 一言日記の保存失敗を試すあいだは、ここで先に保存しない。
+        // キーボードを閉じただけで保存が成功すると、月移動の失敗を通り越してしまう。
+        // 編集欄は開いたままにする。月移動の保存が、本当の setLogLine で失敗する。
+        if failureInjectionPending, monthMoveFailure == .log {
+            return
+        }
         let saved = saveDraft(dateKey: previous)
         if saved {
             editingDateKey = nil
@@ -604,21 +687,51 @@ struct MonthlyLogPageView: View {
         _ = saveDraft(dateKey: current)
     }
 
-    /// ◀▶。判定の順は `MonthMoveRule.result` と同じ。画面は、その段階の保存と読み込みだけをする。
-    ///
-    /// 確認が出ているあいだは、何もしない。
-    /// 空にして消す下書きは、確認を出して止める。確認なしでは消さない。
-    /// タスク欄の未確定は、1行の保存や編集終了より前に見る。止めたときは、両方の下書きを残す。
-    /// 1行の保存、またはそのあとの読み込みに失敗したら、入力を残して Router は変えない。
-    /// 移れるときだけ、移る先の月ページを探す。無ければ作る。読めなければ Router は変えない。
+    /// ◀▶。隣の月を、外からの依頼と同じ手順で開く。
     private func moveMonth(goingForward: Bool) {
-        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
-            return
-        }
         guard let destination = MonthMoveRule.destination(
             from: displayedMonthKey,
             goingForward: goingForward
         ) else {
+            return
+        }
+        move(to: destination)
+    }
+
+    /// 外から頼まれた月。◀▶ と同じ手順。依頼は、見る前に片付ける。
+    ///
+    /// 失敗しても、今の月と下書きは残る。同じ依頼では、もう一度動かさない。
+    private func handleMonthRequest(_ request: MonthNavigationRequest?) {
+        guard let request else {
+            return
+        }
+        if request.monthKey == displayedMonthKey {
+            acknowledgeMonthRequest()
+            return
+        }
+        acknowledgeMonthRequest()
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
+            // 確認が出ている。依頼は見たので繰り返さない。黙っては捨てない。
+            deleteConfirmFromMonthMove = pendingDeleteDateKey != nil
+            monthMoveBlockedByOpenConfirm = true
+            return
+        }
+        move(to: request.monthKey)
+    }
+
+    /// ◀▶ も外からの依頼も、ここだけを通る。判定の順は `MonthMoveRule.result` と同じ。
+    ///
+    /// 確認が出ているあいだは、何もしない。
+    /// 同じ月なら、保存もページ作成もしない。
+    /// 空にして消す下書きは、確認を出して止める。確認なしでは消さない。
+    /// タスク欄の未確定は、1行の保存や編集終了より前に見る。止めたときは、両方の下書きを残す。
+    /// 1行の保存、またはそのあとの読み込みに失敗したら、入力を残して Router は変えない。
+    /// 移れるときだけ、移る先の月ページを探す。無ければ作る。読めなければ Router は変えない。
+    private func move(to destination: String) {
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
+            return
+        }
+        guard DateKey.isValidMonthKey(destination) else {
             return
         }
         if destination == displayedMonthKey {
@@ -638,6 +751,7 @@ struct MonthlyLogPageView: View {
         switch before {
         case .confirmDelete:
             if let current = editingDateKey {
+                deleteConfirmFromMonthMove = true
                 pendingDeleteDateKey = current
             }
             return
@@ -663,7 +777,7 @@ struct MonthlyLogPageView: View {
         }
         isMovingEdit = true
         editFocusLanded = false
-        let saved = saveDraft(dateKey: target)
+        let saved = saveDraft(dateKey: target, duringMonthMove: true)
         let after = MonthMoveRule.phaseAfterLogSave(
             logSaveSucceeded: saved,
             loadFailed: loadFailed
@@ -678,8 +792,10 @@ struct MonthlyLogPageView: View {
 
     /// タスク欄の未確定で月を止める。1行は保存しない。編集も閉じない。入力も残す。
     private func blockMoveForTaskDraft() {
-        captureTaskDraftMonthIfNeeded()
         taskDraftMoveBlocked = true
+        if editingDateKey != nil {
+            logHold.blockWhileEditing()
+        }
         isAddingTask = true
         editorFocus = .taskTitle
         taskDraftBlockFocused = true
@@ -709,14 +825,17 @@ struct MonthlyLogPageView: View {
     /// 読めなかったら「記録を読み込めませんでした」。今の月の行と入力は残す。前の保存失敗は消す。
     /// エラーを消すためだけに、ページを作ったり消したりはしない。
     private func prepareAndMove(to destination: String) {
-        if let injection = consumeFailureInjection() {
+        if let injection = consumePageFailureInjection() {
             switch injection {
             case .save:
                 recordMoveProblem(.save)
+                return
             case .load:
                 recordMoveProblem(.load)
+                return
+            case .log:
+                break
             }
-            return
         }
         let store = JournalStore(context: modelContext)
         var pageSaveSucceeded = true
@@ -754,7 +873,7 @@ struct MonthlyLogPageView: View {
 
     /// 移れたときだけ、前の月の編集状態を捨てて、移る先の中身を出してから Router を変える。
     ///
-    /// 中身を先に覚える。Router が変わったときの読み直しは、同じ月なら何もしない。
+    /// 中身を先に覚える。Router を変えたあとに、もう一度は読まない。
     /// タスク欄の未確定の文字は、ここに来る前に無い。空白だけなら、ここで閉じる。
     private func applyDestination(
         _ content: MonthlyLogContent,
@@ -769,9 +888,18 @@ struct MonthlyLogPageView: View {
         }
         loadFailed = false
         saveFailed = false
-        moveProblem = MonthMoveRule.replacing(previous: moveProblem, with: .none)
-        loadedMonthKey = destination
-        openMonth(destination)
+        moveProblem = .none
+        let authorization = MonthMoveAuthorization.forSuccessfulMove()
+        let commitMonth = openMonth
+        // 焦点を外したあとに月の入れ物を作り直す。同じ更新で行うと、
+        // キーボードを閉じる動きが終わらず、次の操作が長時間待つ。
+        DispatchQueue.main.async {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                commitMonth(destination, authorization)
+            }
+        }
     }
 
     /// 移れたときだけ捨てる、月ごとの編集状態。
@@ -786,107 +914,38 @@ struct MonthlyLogPageView: View {
         pendingDeleteTask = nil
         isAddingTask = false
         taskDraftTitle = ""
-        taskDraftMonthKey = nil
         taskDraftMoveBlocked = false
+        logHold.editingClosed()
+        deleteConfirmFromMonthMove = false
+        monthMoveBlockedByOpenConfirm = false
         taskDraftBlockFocused = false
     }
 
     /// 今回の移動失敗だけを残す。前の失敗は置き換える。行のデータは変えない。
     private func recordMoveProblem(_ problem: MonthMoveRule.MoveProblem) {
-        let next = MonthMoveRule.replacing(previous: moveProblem, with: problem)
-        if next == .none {
+        if problem == .none {
             moveProblem = .none
             return
         }
-        moveProblem = next
+        moveProblem = problem
         // この移動の失敗は moveProblem だけが出す。前の保存失敗の文は残さない。
         saveFailed = false
         moveFailureToken += 1
     }
 
-    /// 注入は1回だけ。2回目の移動は、本当の保存と読み込みに任せる。
-    private func consumeFailureInjection() -> MonthMoveFailureInjection? {
+    /// 移る先の保存か読み込みの注入は1回だけ。一言日記の注入は、ここでは使わない。
+    ///
+    /// 一言日記は `saveDraft` が、本当の `setLogLine` の保存で失敗させる。
+    /// 2回目の移動は、本当の保存と読み込みに任せる。
+    private func consumePageFailureInjection() -> MonthMoveFailureInjection? {
         guard failureInjectionPending, let monthMoveFailure else {
+            return nil
+        }
+        if monthMoveFailure == .log {
             return nil
         }
         failureInjectionPending = false
         return monthMoveFailure
-    }
-
-    /// Router が、◀▶ 以外から月を変えたとき。
-    ///
-    /// すでにこの移動で中身を入れてあるときは、何もしない。
-    /// 下書きは、書き始めた日付と月にだけ保存する。空にして消す下書きは確認に回す。
-    /// 別の月の日付へは書かない。未確定のタスク名は捨てない。
-    private func handleRouterMonthChange(from oldMonth: String, to newMonth: String) {
-        if newMonth == loadedMonthKey {
-            return
-        }
-        if newMonth == oldMonth {
-            return
-        }
-        let sourceMonth = loadedMonthKey.isEmpty ? oldMonth : loadedMonthKey
-        let needsDelete: Bool
-        if let current = editingDateKey {
-            needsDelete = draftDeletesExistingLine(dateKey: current)
-        } else {
-            needsDelete = false
-        }
-        let plan = MonthMoveRule.externalMonthPlan(
-            loadedMonthKey: sourceMonth,
-            routerMonthKey: newMonth,
-            editingDateKey: editingDateKey,
-            needsDeleteConfirmation: needsDelete,
-            taskDraft: taskDraftTitle,
-            taskDraftMonthKey: taskDraftMonthKey
-        )
-        applyExternalPlan(plan, destination: newMonth)
-    }
-
-    /// 外から月が変わったあとの下書き。保存先は、計画に入っている日付と月だけ。
-    private func applyExternalPlan(_ plan: MonthMoveRule.ExternalMonthPlan, destination: String) {
-        switch plan.log {
-        case .none:
-            editingDateKey = nil
-            draftText = ""
-            editSession.clear()
-            isMovingEdit = false
-            editFocusLanded = false
-            editorFocus = nil
-            pendingDeleteDateKey = nil
-        case .confirmDelete(let dateKey):
-            pendingDeleteDateKey = dateKey
-        case .commit(let dateKey):
-            isMovingEdit = true
-            editFocusLanded = false
-            let saved = saveDraft(dateKey: dateKey)
-            if saved {
-                editingDateKey = nil
-                draftText = ""
-                editSession.clear()
-                isMovingEdit = false
-                editFocusLanded = false
-                editorFocus = nil
-                pendingDeleteDateKey = nil
-            } else {
-                keepLogEditor(on: dateKey)
-            }
-        }
-        switch plan.task {
-        case .none:
-            taskDraftTitle = ""
-            taskDraftMonthKey = nil
-            isAddingTask = false
-            taskDraftMoveBlocked = false
-        case .keep(let month):
-            taskDraftMonthKey = month
-            isAddingTask = true
-        }
-        pendingDeleteTask = nil
-        loadMonth(destination)
-        if loadFailed == false {
-            moveProblem = MonthMoveRule.replacing(previous: moveProblem, with: .none)
-        }
     }
 
     /// 今の下書きを確定すると、保存してある文章が消えるとき true。
@@ -959,11 +1018,20 @@ struct MonthlyLogPageView: View {
     /// 成功したら、編集中でない行の表示だけ読み直す。下書きはここでは消さない。
     /// 記録は下書きの文字になるので、覚えていた元の文字もそれに合わせる。
     /// 失敗したら false。画面の文字は捨てない。覚えていた元の文字も変えない。
-    private func saveDraft(dateKey: String) -> Bool {
-        let store = JournalStore(context: modelContext)
+    private func saveDraft(dateKey: String, duringMonthMove: Bool = false) -> Bool {
+        let failThisSave = duringMonthMove && failureInjectionPending && monthMoveFailure == .log
+        let store = JournalStore(context: modelContext, save: { context in
+            if failThisSave {
+                throw MonthMoveDebugSaveError.forced
+            }
+            try context.save()
+        })
         do {
             try store.setLogLine(dateKey: dateKey, text: draftText)
         } catch {
+            if failThisSave {
+                failureInjectionPending = false
+            }
             saveFailed = true
             return false
         }
@@ -992,13 +1060,11 @@ struct MonthlyLogPageView: View {
                 MonthlyTaskItem(task: task)
             }
             loadFailed = false
-            loadedMonthKey = month
         } catch {
             textByDateKey = [:]
             dailyDateKeys = []
             tasks = []
             loadFailed = true
-            loadedMonthKey = month
         }
     }
 
@@ -1048,21 +1114,13 @@ struct MonthlyLogPageView: View {
     }
 
     /// ＋ で名前欄を出す。編集中の1行があれば、先に確定する。
-    /// 名前の保存先は、欄を開いたときの月。
+    /// 名前の保存先は、いま開いている月。月は、移動が成功するまで変わらない。
     private func beginAddingTask() {
         guard leaveLogEditForTaskAction() else {
             return
         }
-        captureTaskDraftMonthIfNeeded()
         isAddingTask = true
         editorFocus = .taskTitle
-    }
-
-    /// タスク名を書き始めた月が未設定なら、いま開いている月を覚える。
-    private func captureTaskDraftMonthIfNeeded() {
-        if taskDraftMonthKey == nil {
-            taskDraftMonthKey = displayedMonthKey
-        }
     }
 
     /// 編集中に名前欄を押したとき。確定できたら、名前欄へフォーカスを移す。
@@ -1079,19 +1137,18 @@ struct MonthlyLogPageView: View {
             return
         }
         let store = JournalStore(context: modelContext)
-        let saveMonth = MonthMoveRule.taskSaveMonthKey(
-            anchorMonthKey: taskDraftMonthKey,
-            displayedMonthKey: displayedMonthKey
-        )
         do {
-            _ = try store.addMonthlyTask(monthKey: saveMonth, title: taskDraftTitle)
-            taskDraftTitle = ""
-            taskDraftMonthKey = nil
-            taskDraftMoveBlocked = false
-            isAddingTask = false
+            _ = try store.addMonthlyTask(monthKey: displayedMonthKey, title: taskDraftTitle)
+            // 焦点を先に外す。欄を同じ更新で消すと、キーボードを閉じる動きが終わらない。
             editorFocus = nil
+            taskDraftMoveBlocked = false
+            logHold.taskAdded()
             saveFailed = false
             reload()
+            DispatchQueue.main.async {
+                taskDraftTitle = ""
+                isAddingTask = false
+            }
         } catch let storeError as JournalStoreError {
             if storeError == .emptyTitle {
                 return
@@ -1228,6 +1285,31 @@ struct MonthlyLogPageView: View {
             parts.append(row.text)
         }
         return parts.joined(separator: " ")
+    }
+}
+
+/// 月の移動が成功したときだけ作れる値。これがない `commitDisplayedMonth` は、表示月を変えない。
+///
+/// 作れるのは、このファイルの移動処理だけ。画面の外は `rejected` しか持てない。
+struct MonthMoveAuthorization: Equatable {
+    private let nonce: UUID
+
+    private init(nonce: UUID) {
+        self.nonce = nonce
+    }
+
+    /// 確認と保存と読み込みが終わった移動だけが呼ぶ。
+    fileprivate static func forSuccessfulMove() -> MonthMoveAuthorization {
+        MonthMoveAuthorization(nonce: UUID())
+    }
+
+    /// 承諾には使えない。画面の外から渡しても、月は変わらない。
+    static let rejected = MonthMoveAuthorization(
+        nonce: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    )
+
+    var isAccepted: Bool {
+        nonce != MonthMoveAuthorization.rejected.nonce
     }
 }
 

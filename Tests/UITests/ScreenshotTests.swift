@@ -468,7 +468,7 @@ final class ScreenshotTests: XCTestCase {
         )
     }
 
-    /// ◀▶ を通さず Router の月だけが変わっても、表示はその月になる。
+    /// 外から月を開く依頼でも、◀▶ と同じ保存のあとで、表示はその月になる。
     /// 編集中の1行は、書き始めた日に残り、開いた先の月には出ない。
     func testExternalMonthChangeMatchesRouterAndKeepsSourceLine() {
         let app = launchMonthly(extraArguments: ["-debugJumpMonth", "2026-11"])
@@ -496,6 +496,295 @@ final class ScreenshotTests: XCTestCase {
 
         goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
         waitUntilTextShows(app, dateKey: "2026-10-26", text: "FromOct")
+    }
+
+    /// 一言日記の保存に失敗したら、外からの月移動は止まる。下書きは見えたまま、編集を続けられる。
+    func testExternalLogSaveFailureKeepsDraftAndAllowsEditing() {
+        let dateKey = "2026-10-26"
+        let app = launchMonthly(
+            extraArguments: ["-failMonthMove", "log", "-debugJumpMonth", "2026-11"],
+            includeSampleData: false
+        )
+        waitForMonthlyLog(app)
+        let field = openMonthlyField(app, dateKey: dateKey)
+        field.typeText("KeepDraft")
+
+        requestDebugMonth(in: app, untilMarker: "monthlySaveError")
+        waitForMonthTitle("2026年 10月", in: app)
+        let saveError = app.descendants(matching: .any)["monthlySaveError"].firstMatch
+        XCTAssertTrue(saveError.waitForExistence(timeout: 5), "保存の失敗が出ません")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlyLogRow-2026-11-01"].exists,
+            "保存に失敗したのに月が移りました"
+        )
+        let shown = field.value as? String ?? ""
+        XCTAssertTrue(shown.contains("KeepDraft"), "失敗した下書きが見えません: " + shown)
+
+        field.tap()
+        field.typeText("More")
+        let resumed = field.value as? String ?? ""
+        XCTAssertTrue(resumed.contains("KeepDraftMore"), "編集を再開できません: " + resumed)
+
+        goToMonth(button: "monthlyNextButton", title: "2026年 11月", in: app)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlyLogRow-2026-10-26"].exists,
+            "10月の行が11月に出ています"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlySaveError"].exists,
+            "成功したあとも、保存の失敗が残っています"
+        )
+        goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
+        waitUntilTextShows(app, dateKey: dateKey, text: "KeepDraftMore")
+    }
+
+    /// タスク名の未確定があると、外からの月移動も止まる。一言日記の編集も残る。
+    func testExternalTaskDraftBlocksMove() {
+        let dateKey = "2026-10-26"
+        let app = launchMonthly(
+            extraArguments: ["-debugJumpMonth", "2026-11"],
+            includeSampleData: false
+        )
+        waitForMonthlyLog(app)
+
+        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        revealMonthlyTask(addButton, in: app)
+        waitUntilHittable(addButton, message: "タスクの追加を押せません")
+        addButton.tap()
+        let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
+        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
+        taskField.tap()
+        taskField.typeText("ExtTask")
+
+        let field = openMonthlyField(app, dateKey: dateKey)
+        field.typeText("ExtLog")
+        requestDebugMonth(in: app, untilMarker: "monthlyTaskDraftBlockMessage")
+
+        waitForMonthTitle("2026年 10月", in: app)
+        let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
+        let logShown = field.value as? String ?? ""
+        XCTAssertTrue(logShown.contains("ExtLog"), "編集中の文字が消えました: " + logShown)
+        let taskShown = taskField.value as? String ?? ""
+        XCTAssertTrue(taskShown.contains("ExtTask"), "未確定のタスク名が消えました: " + taskShown)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlyLogRow-2026-11-01"].exists,
+            "未確定のまま月が移りました"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlyTaskLabel-ExtTask"].exists,
+            "未確定のタスクが保存されました"
+        )
+    }
+
+    /// 外からの月移動でも、削除確認のキャンセルは記録を残す。「消す」はその行だけ消して、月は移さない。
+    func testExternalDeleteConfirmationCancelKeepsLineAndDeleteRemovesOnlyThatLine() {
+        let dateKey = "2026-10-24"
+        let app = launchMonthly(extraArguments: ["-debugJumpMonth", "2026-11"])
+        waitForMonthlyLog(app)
+
+        let field = openMonthlyField(app, dateKey: dateKey)
+        deleteAllCharacters(in: field, knownText: "資料", app: app)
+        let alert = waitForExternalDeleteAlert(in: app)
+        let fromMove = app.descendants(matching: .any)["monthlyLogDeleteFromMonthMove"]
+        let blocked = app.descendants(matching: .any)["monthlyMoveBlockedByConfirm"]
+        XCTAssertTrue(
+            fromMove.exists || blocked.exists,
+            "確認が、月の移動からなのか、焦点が外れたからなのか分かりません"
+        )
+        let cancel = alert.buttons["キャンセル"].firstMatch
+        waitUntilHittable(cancel, message: "キャンセルを押せません")
+        cancel.tap()
+        waitUntilGone(alert, message: "確認が閉じません")
+        waitUntilTextShows(app, dateKey: dateKey, text: "資料")
+        waitUntilTextShows(app, dateKey: "2026-10-01", text: "月初")
+        waitForMonthTitle("2026年 10月", in: app)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlyLogRow-2026-11-01"].exists,
+            "キャンセルのあとに月が移りました"
+        )
+
+        let fieldAgain = openMonthlyField(app, dateKey: dateKey)
+        deleteAllCharacters(in: fieldAgain, knownText: "資料", app: app)
+        let alertAgain = waitForExternalDeleteAlert(in: app)
+        let fromMoveAgain = app.descendants(matching: .any)["monthlyLogDeleteFromMonthMove"]
+        let blockedAgain = app.descendants(matching: .any)["monthlyMoveBlockedByConfirm"]
+        XCTAssertTrue(
+            fromMoveAgain.exists || blockedAgain.exists,
+            "2回目の確認の出どころが分かりません"
+        )
+        let confirm = alertAgain.buttons["消す"].firstMatch
+        waitUntilHittable(confirm, message: "消すを押せません")
+        confirm.tap()
+        waitUntilGone(alertAgain, message: "確認が閉じません")
+        waitUntilTextHides(app, dateKey: dateKey, text: "資料")
+        waitUntilTextShows(app, dateKey: "2026-10-01", text: "月初")
+        waitForMonthTitle("2026年 10月", in: app)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["monthlyLogRow-2026-11-01"].exists,
+            "消したあとに月が移りました"
+        )
+    }
+
+    /// 止めたタスク名を消すと、一言日記の編集欄に焦点が戻る。
+    func testClearingBlockedTaskDraftRestoresLogEditor() {
+        let dateKey = "2026-10-26"
+        let app = launchMonthly(includeSampleData: false)
+        waitForMonthlyLog(app)
+
+        // ＋ を先に押す。日記を開いたまま ＋ を押すと、その日記は保存されて閉じる。
+        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        revealMonthlyTask(addButton, in: app)
+        waitUntilHittable(addButton, message: "タスクの追加を押せません")
+        addButton.tap()
+        let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
+        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
+        taskField.tap()
+        taskField.typeText("Temp")
+
+        let field = openMonthlyField(app, dateKey: dateKey)
+        field.typeText("FocusLog")
+        tapMonthButton("monthlyNextButton", in: app)
+        tapMonthButton("monthlyNextButton", in: app)
+        let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "止めた時点で一言日記の編集欄が閉じました")
+        let blockedText = field.value as? String ?? ""
+        XCTAssertTrue(blockedText.contains("FocusLog"), "止めた時点で下書きが消えました: " + blockedText)
+
+        clearTaskTitle(taskField, knownText: "Temp", app: app)
+        let logField = app.descendants(matching: .textField)["monthlyLogText-" + dateKey]
+        var scrolls = 0
+        while logField.exists == false && scrolls < 3 {
+            app.swipeDown()
+            scrolls += 1
+        }
+        XCTAssertTrue(logField.waitForExistence(timeout: 5), dateKey + " の編集欄がありません")
+        let logStill = logField.value as? String ?? ""
+        XCTAssertTrue(logStill.contains("FocusLog"), "一言日記の編集欄が閉じました: " + logStill)
+
+        let focused = NSPredicate(format: "hasKeyboardFocus == true")
+        let ready = XCTNSPredicateExpectation(predicate: focused, object: logField)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [ready], timeout: 5),
+            .completed,
+            "一言日記の編集欄に焦点が戻りません"
+        )
+        logField.typeText("Z")
+        let resumed = logField.value as? String ?? ""
+        XCTAssertTrue(resumed.contains("FocusLogZ"), "焦点を戻した欄に書けません: " + resumed)
+        waitForMonthTitle("2026年 10月", in: app)
+    }
+
+    /// タスク欄で止めたあとタスクを追加したら、次の日記は焦点が外れたときに保存して閉じる。
+    func testAfterTaskBlockAddingTaskRestoresFocusLossSave() {
+        let app = launchMonthly(includeSampleData: false)
+        waitForMonthlyLog(app)
+
+        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        revealMonthlyTask(addButton, in: app)
+        waitUntilHittable(addButton, message: "タスクの追加を押せません")
+        addButton.tap()
+        let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
+        revealMonthlyTask(taskField, in: app)
+        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
+        taskField.tap()
+        taskField.typeText("HoldTask")
+
+        let first = openMonthlyField(app, dateKey: "2026-10-26")
+        first.typeText("StayOpen")
+        tapMonthButton("monthlyNextButton", in: app)
+        tapMonthButton("monthlyNextButton", in: app)
+        let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
+
+        let confirm = app.descendants(matching: .any)["monthlyTaskConfirmButton"].firstMatch
+        revealMonthlyTask(confirm, in: app)
+        waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
+        confirm.tap()
+        XCTAssertTrue(
+            monthlyTaskButton("未完 HoldTask", in: app).waitForExistence(timeout: 5),
+            "止めたあとのタスクが追加されません"
+        )
+        let closedFirst = app.descendants(matching: .textField)["monthlyLogText-2026-10-26"]
+        XCTAssertFalse(closedFirst.exists, "タスクを追加したあとも、最初の日記が編集のままです")
+
+        let second = openMonthlyField(app, dateKey: "2026-10-25")
+        second.typeText("NextLine")
+        // 別の行を押すと、前の行を保存してからその行を開く。
+        // キーボードを閉じるだけの操作は、この画面には確定的な入口が無い。
+        tapMonthlyText(app, dateKey: "2026-10-24")
+        waitForMonthTitle("2026年 10月", in: app)
+        let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
+        let closed = NSPredicate(format: "exists == false")
+        let closedExpectation = XCTNSPredicateExpectation(predicate: closed, object: stillEditing)
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [closedExpectation], timeout: 5),
+            .completed,
+            "別の行へ移したあとも、前の編集欄が閉じていません"
+        )
+        waitUntilTextShows(app, dateKey: "2026-10-25", text: "NextLine")
+        waitForMonthTitle("2026年 10月", in: app)
+    }
+
+    /// 12月から翌年1月、1月から前年12月へ、外からの依頼でも表示と行がその月になる。
+    func testExternalMonthCrossesYear() {
+        let forward = XCUIApplication()
+        forward.launchArguments = [
+            "-inMemoryStore",
+            "-openPage",
+            "monthly:2026-12",
+            "-todayKey",
+            "2026-12-15",
+            "-debugJumpMonth",
+            "2027-01",
+        ]
+        forward.launch()
+        XCTAssertTrue(
+            forward.descendants(matching: .any)["monthlyLogScreen"].waitForExistence(timeout: 10),
+            "12月の画面がありません"
+        )
+        waitForMonthTitle("2026年 12月", in: forward)
+        XCTAssertTrue(
+            forward.descendants(matching: .any)["monthlyLogRow-2026-12-01"].waitForExistence(timeout: 10),
+            "12月1日の行がありません"
+        )
+        tapDebugJump(untilTitle: "2027年 1月", in: forward)
+        XCTAssertTrue(
+            forward.descendants(matching: .any)["monthlyLogRow-2027-01-01"].waitForExistence(timeout: 10),
+            "1月1日の行がありません"
+        )
+        XCTAssertFalse(
+            forward.descendants(matching: .any)["monthlyLogRow-2026-12-01"].exists,
+            "12月の行が1月に出ています"
+        )
+        forward.terminate()
+
+        let backward = XCUIApplication()
+        backward.launchArguments = [
+            "-inMemoryStore",
+            "-openPage",
+            "monthly:2027-01",
+            "-todayKey",
+            "2027-01-02",
+            "-debugJumpMonth",
+            "2026-12",
+        ]
+        backward.launch()
+        XCTAssertTrue(
+            backward.descendants(matching: .any)["monthlyLogScreen"].waitForExistence(timeout: 10),
+            "1月の画面がありません"
+        )
+        waitForMonthTitle("2027年 1月", in: backward)
+        tapDebugJump(untilTitle: "2026年 12月", in: backward)
+        XCTAssertTrue(
+            backward.descendants(matching: .any)["monthlyLogRow-2026-12-31"].waitForExistence(timeout: 10),
+            "12月31日の行がありません"
+        )
+        XCTAssertFalse(
+            backward.descendants(matching: .any)["monthlyLogRow-2027-01-01"].exists,
+            "1月の行が12月に出ています"
+        )
     }
 
     /// 文字を大きくしたときの月の画面。
@@ -547,6 +836,61 @@ final class ScreenshotTests: XCTestCase {
             attempt += 1
         }
         waitForMonthTitle(title, in: app)
+    }
+
+    /// 外からの月移動。キーボードが最初のタップを取るときは、印が出るまでもう一度押す。
+    /// 印が出たあとは押さない。失敗の注入を、成功する再試行で消さないため。
+    private func requestDebugMonth(in app: XCUIApplication, untilMarker identifier: String) {
+        let jump = app.descendants(matching: .any)["debugJumpMonth"].firstMatch
+        XCTAssertTrue(jump.waitForExistence(timeout: 5), "外部からの月移動がありません")
+        var attempt = 0
+        while attempt < 3 {
+            let marker = app.descendants(matching: .any)[identifier].firstMatch
+            if marker.exists {
+                return
+            }
+            waitUntilHittable(jump, message: "外部からの月移動を押せません")
+            jump.tap()
+            if marker.waitForExistence(timeout: 2) {
+                return
+            }
+            attempt += 1
+        }
+        let marker = app.descendants(matching: .any)[identifier].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 5), identifier + " が出ません")
+    }
+
+    /// 外からの月移動で、タイトルが変わるまで押す。すでにその月なら押さない。
+    private func tapDebugJump(untilTitle title: String, in app: XCUIApplication) {
+        let jump = app.descendants(matching: .any)["debugJumpMonth"].firstMatch
+        XCTAssertTrue(jump.waitForExistence(timeout: 5), "外部からの月移動がありません")
+        var attempt = 0
+        while attempt < 3 {
+            let element = app.descendants(matching: .any)["monthlyTitle"]
+            if element.waitForExistence(timeout: 2), element.label == title {
+                return
+            }
+            waitUntilHittable(jump, message: "外部からの月移動を押せません")
+            jump.tap()
+            attempt += 1
+        }
+        waitForMonthTitle(title, in: app)
+    }
+
+    /// 外からの月移動で、空の行を消す確認が出るまで押す。
+    private func waitForExternalDeleteAlert(in app: XCUIApplication) -> XCUIElement {
+        let jump = app.descendants(matching: .any)["debugJumpMonth"].firstMatch
+        XCTAssertTrue(jump.waitForExistence(timeout: 5), "外部からの月移動がありません")
+        waitUntilHittable(jump, message: "外部からの月移動を押せません")
+        jump.tap()
+        var alert = app.alerts["この行を消しますか？"].firstMatch
+        if alert.waitForExistence(timeout: 3) == false {
+            waitUntilHittable(jump, message: "外部からの月移動を押せません")
+            jump.tap()
+            alert = app.alerts["この行を消しますか？"].firstMatch
+        }
+        XCTAssertTrue(alert.waitForExistence(timeout: 10), "行を消す確認が出ません")
+        return alert
     }
 
     private func tapMonthButton(_ identifier: String, in app: XCUIApplication) {
@@ -655,6 +999,42 @@ final class ScreenshotTests: XCTestCase {
         )
         field.tap()
         return field
+    }
+
+    /// タスク名を、delete キーで空にする。空と、欄の案内「タスク」は入力なしとみなす。
+    ///
+    /// 全文の一部だけ消えると、未確定のまま残り、焦点は戻らない。空になってから次へ進む。
+    private func clearTaskTitle(_ field: XCUIElement, knownText: String, app: XCUIApplication) {
+        var attempt = 0
+        while attempt < 4 {
+            let shown = field.value as? String ?? ""
+            if isClearedTaskTitle(shown) && attempt > 0 {
+                break
+            }
+            if shown == "タスク" {
+                break
+            }
+            let deleteCount = knownText.count
+            let endOfField = field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5))
+            endOfField.tap()
+            let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue, count: deleteCount)
+            field.typeText(deletes)
+            attempt += 1
+        }
+        let afterDeletes = field.value as? String ?? ""
+        if isClearedTaskTitle(afterDeletes) == false {
+            selectAllThenDelete(in: field, app: app)
+        }
+        let leftover = field.value as? String ?? ""
+        XCTAssertTrue(isClearedTaskTitle(leftover), "タスク名が空ではありません: " + leftover)
+    }
+
+    /// 入力が残っていないとき true。案内の「タスク」だけは空とみなす。
+    private func isClearedTaskTitle(_ shown: String) -> Bool {
+        if shown.isEmpty || shown == "タスク" {
+            return true
+        }
+        return false
     }
 
     /// 編集欄の文字を、末尾から delete キーだけで消す。空になったら終わる。

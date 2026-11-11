@@ -20,6 +20,21 @@ final class MonthMoveDebugHooksTests: XCTestCase {
             ),
             .load
         )
+        XCTAssertEqual(
+            MonthMoveFailureInjection.fromLaunchArgument(
+                "log",
+                inMemoryStore: true,
+                isDebugBuild: true
+            ),
+            .log
+        )
+        XCTAssertNil(
+            MonthMoveFailureInjection.fromLaunchArgument(
+                "log",
+                inMemoryStore: false,
+                isDebugBuild: true
+            )
+        )
         XCTAssertNil(
             MonthMoveFailureInjection.fromLaunchArgument(
                 "save",

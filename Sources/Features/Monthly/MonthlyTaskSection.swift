@@ -73,8 +73,8 @@ struct MonthlyTaskSection: View {
     @Binding var isAdding: Bool
     @Binding var draftTitle: String
     var editorFocus: FocusState<MonthlyEditorFocus?>.Binding
-    /// 1行を編集中なら true。名前欄は、そのあいだ直接フォーカスを取らない。
-    let logEditActive: Bool
+    /// 編集中の1行の日付。無いときは、1行は開いていない。
+    let editingLogDateKey: String?
     /// 月の移動をタスク欄で止めたとき true。1行を編集中でも、名前欄へ焦点を移す。
     var focusTaskTitleDespiteLogEdit: Bool = false
     let onBeginAdd: () -> Void
@@ -86,6 +86,11 @@ struct MonthlyTaskSection: View {
 
     /// 行の並びの実際の高さ。上限より高いときは、この中だけを滑らせる。
     @State private var listContentHeight: CGFloat = 0
+
+    /// 1行を編集中なら true。名前欄は、そのあいだ直接フォーカスを取らない。
+    private var logEditActive: Bool {
+        editingLogDateKey != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
