@@ -123,6 +123,46 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(partial.waitForExistence(timeout: 5), "消したあとに Tidy がありません")
     }
 
+    /// 文章がある行を空にしたあと、タスクの記号を押す。
+    ///
+    /// 行を消す確認が出て、タスクの状態は変わらない。キャンセルで元の文章が戻る。
+    /// アラートとボタンは firstMatch。押す前に isHittable を待つ。
+    func testClearingLogLineThenTappingTaskSymbolKeepsTask() {
+        let dateKey = "2026-10-24"
+        let original = "資料"
+        let taskLabel = "未完 今月のねらい"
+        let app = launchMonthly()
+        waitForMonthlyLog(app)
+
+        let symbol = monthlyTaskButton(taskLabel, in: app)
+        XCTAssertTrue(symbol.waitForExistence(timeout: 10), "タスクの記号がありません")
+
+        let field = openMonthlyField(app, dateKey: dateKey)
+        deleteAllCharacters(in: field, knownText: original, app: app)
+
+        revealMonthlyTask(symbol, in: app)
+        waitUntilHittable(symbol, message: "タスクの記号を押せません")
+        symbol.tap()
+
+        let alert = app.alerts["この行を消しますか？"].firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 10), "行を消す確認が出ません")
+        let unchanged = monthlyTaskButton(taskLabel, in: app)
+        XCTAssertTrue(unchanged.waitForExistence(timeout: 5), "タスクの状態が変わりました")
+        let advanced = monthlyTaskButton("一部 今月のねらい", in: app)
+        XCTAssertFalse(advanced.exists, "記号を押してタスクが進みました")
+
+        let cancel = alert.buttons["キャンセル"].firstMatch
+        waitUntilHittable(cancel, message: "キャンセルを押せません")
+        cancel.tap()
+
+        waitUntilGone(alert, message: "確認が閉じません")
+        waitUntilTextShows(app, dateKey: dateKey, text: original)
+        XCTAssertTrue(
+            monthlyTaskButton(taskLabel, in: app).waitForExistence(timeout: 5),
+            "キャンセル後にタスクの状態が変わりました"
+        )
+    }
+
     /// 文字を大きくしたときの月の画面。
     func testMonthlyLogLargeTextScreenshot() {
         let app = launchMonthly(extraArguments: [

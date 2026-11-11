@@ -192,7 +192,7 @@ private extension View {
     func monthlyTaskDeleteMenu(enabled: Bool, action: @escaping () -> Void) -> some View {
         if enabled {
             contextMenu {
-                Button("削除", action: action)
+                Button("削除", role: .destructive, action: action)
                     .accessibilityIdentifier("monthlyTaskDeleteAction")
             }
         } else {

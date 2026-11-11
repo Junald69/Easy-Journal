@@ -122,7 +122,7 @@ struct MonthlyLogPageView: View {
                 }
                 .accessibilityIdentifier("monthlyLogDeleteCancel")
             case .deleteTask(let task):
-                Button("消す") {
+                Button("消す", role: .destructive) {
                     let taskID = task.id
                     performDeleteTask(id: taskID)
                 }
@@ -639,6 +639,7 @@ struct MonthlyLogPageView: View {
     ///
     /// 確認が出ているあいだは、何もしない。
     /// 空にして消す下書きなら、確認を出して止める。保存に失敗したら止める。
+    /// 保存は成功しても、そのあとの読み直しに失敗したら、タスク操作だけ止める。
     /// 文章は、確認なしでは消さない。読み込みに失敗しているときも止める。
     private func leaveLogEditForTaskAction() -> Bool {
         if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
@@ -661,14 +662,22 @@ struct MonthlyLogPageView: View {
             isMovingEdit = false
             editFocusLanded = true
             editorFocus = .log(current)
-            return false
+            return MonthlyTaskActionRule.mayProceedAfterLogSave(
+                logSaveSucceeded: saved,
+                loadFailed: loadFailed
+            )
         }
         editingDateKey = nil
         draftText = ""
         editorFocus = nil
         editSession.clear()
         isMovingEdit = false
-        return true
+        // 保存は成功しても、その中の読み直しが失敗したら、タスク操作だけ止める。
+        // 1行の保存結果（saveDraft の戻り値）は変えない。タスク名の下書きも残す。
+        return MonthlyTaskActionRule.mayProceedAfterLogSave(
+            logSaveSucceeded: saved,
+            loadFailed: loadFailed
+        )
     }
 
     /// ＋ で名前欄を出す。編集中の1行があれば、先に確定する。
