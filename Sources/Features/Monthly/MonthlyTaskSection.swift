@@ -75,6 +75,8 @@ struct MonthlyTaskSection: View {
     var editorFocus: FocusState<MonthlyEditorFocus?>.Binding
     /// 1行を編集中なら true。名前欄は、そのあいだ直接フォーカスを取らない。
     let logEditActive: Bool
+    /// 月の移動をタスク欄で止めたとき true。1行を編集中でも、名前欄へ焦点を移す。
+    var focusTaskTitleDespiteLogEdit: Bool = false
     let onBeginAdd: () -> Void
     /// 編集中に名前欄を押したとき。確定してからフォーカスを移す。
     let onActivateComposer: () -> Void
@@ -188,10 +190,10 @@ struct MonthlyTaskSection: View {
                     .textFieldStyle(.plain)
                     .submitLabel(.done)
                     .focused(editorFocus, equals: .taskTitle)
-                    .disabled(logEditActive)
+                    .disabled(logEditActive && focusTaskTitleDespiteLogEdit == false)
                     .onSubmit { onConfirm() }
                     .onAppear {
-                        if logEditActive == false {
+                        if focusTaskTitleDespiteLogEdit || logEditActive == false {
                             editorFocus.wrappedValue = .taskTitle
                         }
                     }
@@ -202,7 +204,7 @@ struct MonthlyTaskSection: View {
                     .disabled(interactionsEnabled == false)
                     .accessibilityIdentifier("monthlyTaskConfirmButton")
             }
-            if logEditActive {
+            if logEditActive && focusTaskTitleDespiteLogEdit == false {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onActivateComposer)
