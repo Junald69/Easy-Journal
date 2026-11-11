@@ -16,6 +16,16 @@ final class DateKeyTests: XCTestCase {
         XCTAssertEqual(DateKey.previousDayKey(before: "2027-01-01"), "2026-12-31")
     }
 
+    /// 2026年10月→11月→10月。12月の次は翌年1月。1月の前は前年12月。
+    func testMonthKeyStepsAcrossMonthsAndYears() {
+        XCTAssertEqual(DateKey.nextMonthKey(after: "2026-10"), "2026-11")
+        XCTAssertEqual(DateKey.previousMonthKey(before: "2026-11"), "2026-10")
+        XCTAssertEqual(DateKey.nextMonthKey(after: "2026-12"), "2027-01")
+        XCTAssertEqual(DateKey.previousMonthKey(before: "2027-01"), "2026-12")
+        XCTAssertEqual(DateKey.previousMonthKey(before: "2026-01"), "2025-12")
+        XCTAssertEqual(DateKey.nextMonthKey(after: "2028-02"), "2028-03")
+    }
+
     func testLeapYearDayKeys() {
         XCTAssertEqual(DateKey.nextDayKey(after: "2028-02-28"), "2028-02-29")
         XCTAssertEqual(DateKey.nextDayKey(after: "2028-02-29"), "2028-03-01")
@@ -87,6 +97,10 @@ final class DateKeyTests: XCTestCase {
         XCTAssertFalse(DateKey.isValidMonthKey("2026-1"))
         XCTAssertFalse(DateKey.isValidMonthKey("2026-13"))
         XCTAssertFalse(DateKey.isValidMonthKey(""))
+        XCTAssertNil(DateKey.nextMonthKey(after: "2026-13"))
+        XCTAssertNil(DateKey.previousMonthKey(before: "2026-13"))
+        XCTAssertNil(DateKey.nextMonthKey(after: ""))
+        XCTAssertNil(DateKey.previousMonthKey(before: "2026-1"))
         XCTAssertTrue(DateKey.isValidDayKey("2026-10-27"))
         XCTAssertTrue(DateKey.isValidMonthKey("2026-10"))
         XCTAssertEqual(DateKey.monthKey(ofDayKey: "2026-10-27"), "2026-10")
