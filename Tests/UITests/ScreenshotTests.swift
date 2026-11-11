@@ -711,11 +711,9 @@ final class ScreenshotTests: XCTestCase {
 
         let second = openMonthlyField(app, dateKey: "2026-10-25")
         second.typeText("NextLine")
-        // ログの上で指を動かすと、キーボードが閉じて焦点が外れる。◀▶ は押さない。
-        let screen = app.descendants(matching: .any)["monthlyLogScreen"]
-        let start = screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-        let end = screen.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        // 別の行を押すと、前の行を保存してからその行を開く。
+        // キーボードを閉じるだけの操作は、この画面には確定的な入口が無い。
+        tapMonthlyText(app, dateKey: "2026-10-24")
         waitForMonthTitle("2026年 10月", in: app)
         let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
         let closed = NSPredicate(format: "exists == false")
@@ -723,7 +721,7 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(
             XCTWaiter().wait(for: [closedExpectation], timeout: 5),
             .completed,
-            "焦点を外したあとも編集欄が閉じていません"
+            "別の行へ移したあとも、前の編集欄が閉じていません"
         )
         waitUntilTextShows(app, dateKey: "2026-10-25", text: "NextLine")
         waitForMonthTitle("2026年 10月", in: app)

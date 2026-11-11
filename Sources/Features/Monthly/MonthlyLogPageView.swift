@@ -75,16 +75,8 @@ struct MonthlyLogPageView: View {
     @State private var pendingDeleteTask: PendingTaskDelete? = nil
     /// タスク欄が理由で月を止めたときだけ true。止めていないときは案内を出さない。
     @State private var taskDraftMoveBlocked = false
-    /// タスク欄の停止を解いたあと、一言日記へ焦点を戻し終わるまでの日付。無いときは nil。
-    ///
-    /// 名前欄が無効になった瞬間に焦点が空になると、編集を保存して閉じてしまう。
-    /// この日付があるあいだは、その空では保存しない。
-    @State private var restoreLogFocusDateKey: String? = nil
-    /// タスク欄で月を止めているあいだ、および焦点を一言日記へ戻しているあいだ true。
-    ///
-    /// このあいだ焦点が外れても、編集欄は閉じない。下書きの文字も捨てない。
-    /// 日記を閉じたとき、止めを解いたときは false に戻す。戻さないと、次の日記が保存されない。
-    @State private var holdLogEditor = false
+    /// タスク欄で止めているあいだ、一言日記を閉じない印。閉じたら両方戻す。
+    @State private var logHold = LogEditorHoldState()
     /// 月の移動が、空の行を消す確認を出したとき true。焦点が外れた確認とは分ける。
     @State private var deleteConfirmFromMonthMove = false
     /// 確認が出ているあいだに月の依頼が来たとき true。黙って捨てない。
@@ -197,13 +189,12 @@ struct MonthlyLogPageView: View {
         }
         .onChange(of: editingDateKey) { _, newKey in
             if newKey == nil {
-                holdLogEditor = false
-                restoreLogFocusDateKey = nil
+                logHold.editingClosed()
             }
         }
         .onChange(of: taskDraftMoveBlocked) { _, blocked in
-            if blocked == false, restoreLogFocusDateKey == nil {
-                holdLogEditor = false
+            if blocked == false {
+                logHold.taskBlockEnded()
             }
         }
         .onChange(of: pendingDeleteDateKey) { _, newValue in
@@ -223,20 +214,16 @@ struct MonthlyLogPageView: View {
             guard let current = editingDateKey else {
                 return
             }
-            holdLogEditor = true
-            restoreLogFocusDateKey = current
+            logHold.beginRestore(dateKey: current)
             let dateKey = current
             // 名前欄が無効になるのと同じ更新で焦点を移すと、無効な欄に残る。
             // 1回だけ戻す。乗らなかったときに繰り返すと、画面が止まらなくなる。
             DispatchQueue.main.async {
-                guard restoreLogFocusDateKey == dateKey else {
+                guard logHold.restoreLogFocusDateKey == dateKey else {
                     return
                 }
                 editorFocus = .log(dateKey)
-                restoreLogFocusDateKey = nil
-                if taskDraftMoveBlocked == false {
-                    holdLogEditor = false
-                }
+                logHold.finishRestore(stillBlocked: taskDraftMoveBlocked)
             }
         }
         .onChange(of: moveFailureToken) { _, _ in
@@ -609,15 +596,15 @@ struct MonthlyLogPageView: View {
     /// タスクの名前欄へ移ったときは、ここでは保存も確認も出さない。
     /// 文章がある行を空にするときは、保存せず確認を出す。
     private func handleFocusChange(oldFocus: MonthlyEditorFocus?, newFocus: MonthlyEditorFocus?) {
-        if restoreLogFocusDateKey != nil {
+        if logHold.restoreLogFocusDateKey != nil {
             // 戻すあいだの空振りでは保存しない。焦点の入れ直しは、上の1回だけ。
-            if let dateKey = restoreLogFocusDateKey, newFocus == .log(dateKey) {
+            if let dateKey = logHold.restoreLogFocusDateKey, newFocus == .log(dateKey) {
                 editFocusLanded = true
                 isMovingEdit = false
             }
             return
         }
-        if holdLogEditor || taskDraftMoveBlocked {
+        if logHold.holdLogEditor || taskDraftMoveBlocked {
             // 止めているあいだ、タスク欄へ焦点が移っても一言日記は閉じない。
             return
         }
@@ -807,7 +794,7 @@ struct MonthlyLogPageView: View {
     private func blockMoveForTaskDraft() {
         taskDraftMoveBlocked = true
         if editingDateKey != nil {
-            holdLogEditor = true
+            logHold.blockWhileEditing()
         }
         isAddingTask = true
         editorFocus = .taskTitle
@@ -928,8 +915,7 @@ struct MonthlyLogPageView: View {
         isAddingTask = false
         taskDraftTitle = ""
         taskDraftMoveBlocked = false
-        restoreLogFocusDateKey = nil
-        holdLogEditor = false
+        logHold.editingClosed()
         deleteConfirmFromMonthMove = false
         monthMoveBlockedByOpenConfirm = false
         taskDraftBlockFocused = false
@@ -1155,8 +1141,7 @@ struct MonthlyLogPageView: View {
             _ = try store.addMonthlyTask(monthKey: displayedMonthKey, title: taskDraftTitle)
             taskDraftTitle = ""
             taskDraftMoveBlocked = false
-            holdLogEditor = false
-            restoreLogFocusDateKey = nil
+            logHold.taskAdded()
             isAddingTask = false
             editorFocus = nil
             saveFailed = false
