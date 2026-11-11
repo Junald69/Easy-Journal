@@ -1139,13 +1139,16 @@ struct MonthlyLogPageView: View {
         let store = JournalStore(context: modelContext)
         do {
             _ = try store.addMonthlyTask(monthKey: displayedMonthKey, title: taskDraftTitle)
-            taskDraftTitle = ""
+            // 焦点を先に外す。欄を同じ更新で消すと、キーボードを閉じる動きが終わらない。
+            editorFocus = nil
             taskDraftMoveBlocked = false
             logHold.taskAdded()
-            isAddingTask = false
-            editorFocus = nil
             saveFailed = false
             reload()
+            DispatchQueue.main.async {
+                taskDraftTitle = ""
+                isAddingTask = false
+            }
         } catch let storeError as JournalStoreError {
             if storeError == .emptyTitle {
                 return
