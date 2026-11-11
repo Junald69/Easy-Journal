@@ -123,6 +123,31 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(partial.waitForExistence(timeout: 5), "消したあとに Tidy がありません")
     }
 
+    /// タスクが多くても、最後の記号はタスク欄の中を滑らせれば押せる。ログは押し出さない。
+    func testManyMonthlyTasksLastSymbolStaysReachable() {
+        let app = launchMonthly(includeSampleData: false)
+        waitForMonthlyLog(app)
+        let lastIndex = 7
+        var index = 0
+        while index <= lastIndex {
+            addMonthlyTask("t" + String(index), in: app)
+            index += 1
+        }
+
+        let last = revealLastMonthlyTask("未完 t" + String(lastIndex), in: app)
+        waitUntilHittable(last, message: "最後のタスクを押せません")
+        last.tap()
+        let advanced = monthlyTaskButton("一部 t" + String(lastIndex), in: app)
+        XCTAssertTrue(advanced.waitForExistence(timeout: 5), "最後のタスクの状態が変わりません")
+
+        let logScroll = app.scrollViews.containing(
+            .any,
+            identifier: "monthlyLogRow-2026-10-27"
+        ).firstMatch
+        XCTAssertTrue(logScroll.waitForExistence(timeout: 5), "ログのスクロールがありません")
+        XCTAssertGreaterThan(logScroll.frame.height, 80, "ログの行を滑らせる余地がありません")
+    }
+
     /// 文章がある行を空にしたあと、タスクの記号を押す。
     ///
     /// 行を消す確認が出て、タスクの状態は変わらない。キャンセルで元の文章が戻る。
@@ -483,6 +508,24 @@ final class ScreenshotTests: XCTestCase {
         let button = alert.buttons[title].firstMatch
         waitUntilHittable(button, message: title + " を押せません")
         button.tap()
+    }
+
+    /// 最後のタスクが画面の外なら、タスク欄の中だけを滑らせて出す。ログは滑らせない。
+    private func revealLastMonthlyTask(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        let list = app.scrollViews["monthlyTaskList"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "タスクの一覧がありません")
+        var symbol = monthlyTaskButton(label, in: app)
+        var attempt = 0
+        while attempt < 8 {
+            symbol = monthlyTaskButton(label, in: app)
+            if symbol.exists, taskSymbolIsAboveKeyboard(symbol, in: app) {
+                return symbol
+            }
+            list.swipeUp()
+            attempt += 1
+        }
+        XCTFail("最後のタスクを一覧の中に出せませんでした")
+        return symbol
     }
 
     /// 記号の枠が、画面の中でキーボードより上になるまで待つ。スクロールはしない。

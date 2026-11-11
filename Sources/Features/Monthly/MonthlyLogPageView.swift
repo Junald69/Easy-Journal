@@ -70,26 +70,28 @@ struct MonthlyLogPageView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            logList
-            if loadFailed {
-                Text("記録を読み込めませんでした")
-                    .font(DesignTokens.Fonts.subText)
-                    .foregroundStyle(DesignTokens.inkSub)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(DesignTokens.Spacing.s)
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                topBar
+                logList
+                if loadFailed {
+                    Text("記録を読み込めませんでした")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(DesignTokens.Spacing.s)
+                }
+                if saveFailed {
+                    Text("保存できませんでした")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(DesignTokens.Spacing.s)
+                }
+                taskSection(maxSectionHeight: geo.size.height * 0.4)
             }
-            if saveFailed {
-                Text("保存できませんでした")
-                    .font(DesignTokens.Fonts.subText)
-                    .foregroundStyle(DesignTokens.inkSub)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(DesignTokens.Spacing.s)
-            }
-            taskSection
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background {
             GridPaperBackground()
         }
@@ -228,13 +230,15 @@ struct MonthlyLogPageView: View {
         .accessibilityIdentifier(identifier)
     }
 
-    /// 月のタスクはログのスクロールの外、ページの下に置く。
+    /// 月のタスクはログのスクロールの外、ページの下に置く。高さはページの4割まで。
     ///
-    /// 1行を編集してキーボードが出ていても、記号がキーボードの上に残る。
-    /// ログを滑らせて記号を探さなくてよい。滑らせるとキーボードが閉じて、下書きが確定してしまう。
-    private var taskSection: some View {
+    /// 行が多いときは、タスクの中だけを滑らせる。ログは動かさない。
+    /// 1行を編集してキーボードが出ていても、記号はキーボードの上から届く。
+    /// ログを滑らせるとキーボードが閉じて、下書きが確定してしまう。
+    private func taskSection(maxSectionHeight: CGFloat) -> some View {
         MonthlyTaskSection(
             tasks: tasks,
+            maxSectionHeight: maxSectionHeight,
             interactionsEnabled: loadFailed == false,
             isAdding: $isAddingTask,
             draftTitle: $taskDraftTitle,

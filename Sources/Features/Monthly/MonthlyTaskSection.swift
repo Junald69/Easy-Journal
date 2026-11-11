@@ -54,9 +54,20 @@ struct MonthlyTaskItem: Identifiable, Equatable {
     }
 }
 
+/// タスク一覧の中身の高さ。画面の外には出さない。
+private struct TaskListHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// 左ページ下部の MONTHLY TASK。追加・記号・削除の見た目だけ。保存は呼び出し側。
 struct MonthlyTaskSection: View {
     let tasks: [MonthlyTaskItem]
+    /// 見出しと一覧を合わせた高さの上限。ページの高さの一部。
+    let maxSectionHeight: CGFloat
     /// 読み込みに失敗しているときは、追加・状態変更・削除を出さない。
     let interactionsEnabled: Bool
     @Binding var isAdding: Bool
@@ -71,21 +82,15 @@ struct MonthlyTaskSection: View {
     let onCycle: (UUID) -> Void
     let onRequestDelete: (MonthlyTaskItem) -> Void
 
+    /// 行の並びの実際の高さ。上限より高いときは、この中だけを滑らせる。
+    @State private var listContentHeight: CGFloat = 0
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if isAdding {
-                composer
-            }
-            ForEach(tasks) { item in
-                MonthlyTaskRow(
-                    item: item,
-                    interactionsEnabled: interactionsEnabled,
-                    onCycle: { onCycle(item.id) },
-                    onRequestDelete: { onRequestDelete(item) }
-                )
-            }
+            taskList
         }
+        .frame(maxWidth: .infinity, maxHeight: maxSectionHeight, alignment: .top)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("monthlyTaskSection")
     }
@@ -112,6 +117,66 @@ struct MonthlyTaskSection: View {
         .padding(.horizontal, DesignTokens.Spacing.l)
         .padding(.top, DesignTokens.Spacing.l)
         .padding(.bottom, DesignTokens.Spacing.s)
+    }
+
+    /// 名前欄と行。見出しと「＋」は、このスクロールの外に残す。
+    ///
+    /// 行が多いときは、この中だけを滑らせる。ログのスクロールは動かさない。
+    /// この滑らせではキーボードを閉じない。閉じると、編集中の1行が確定してしまう。
+    private var taskList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if isAdding {
+                        composer
+                    }
+                    ForEach(tasks) { item in
+                        MonthlyTaskRow(
+                            item: item,
+                            interactionsEnabled: interactionsEnabled,
+                            onCycle: { onCycle(item.id) },
+                            onRequestDelete: { onRequestDelete(item) }
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.preference(key: TaskListHeightKey.self, value: geo.size.height)
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .scrollDismissesKeyboard(.never)
+            .accessibilityIdentifier("monthlyTaskList")
+            .frame(height: listHeight)
+            .onPreferenceChange(TaskListHeightKey.self) { newValue in
+                if abs(listContentHeight - newValue) > 0.5 {
+                    listContentHeight = newValue
+                }
+            }
+            .onChange(of: isAdding) { _, adding in
+                if adding {
+                    proxy.scrollTo("monthlyTaskComposer", anchor: .top)
+                }
+            }
+        }
+    }
+
+    /// 中身が少ないときはその高さ。多いときは、見出しを残した上限まで。
+    ///
+    /// まだ測れていないときは、見出しの下に1行ぶんだけ取る。上限いっぱいは取らない。
+    private var listHeight: CGFloat {
+        let headerRoom = DesignTokens.gridSize * 4
+        let available = maxSectionHeight - headerRoom
+        let room = max(DesignTokens.gridSize * 2, available)
+        if listContentHeight <= 0 {
+            return DesignTokens.gridSize * 2
+        }
+        if listContentHeight < room {
+            return listContentHeight
+        }
+        return room
     }
 
     private var composer: some View {
