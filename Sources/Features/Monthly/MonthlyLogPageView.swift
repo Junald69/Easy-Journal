@@ -1,13 +1,15 @@
 import SwiftData
 import SwiftUI
 
-/// 月の左ページ（Monthly Log）。
+/// 月の左ページ（Monthly Log と Monthly Task）。
 ///
 /// 文章の部分だけ、その場で1行を編集できる。保存は `setLogLine` だけ。
 /// 文章がある行を空にして確定するときは、消す前に確認する。
 /// 編集を始めたときの文字は別に覚える。読み直しが失敗して表示が空でも、その文字で確認する。
 /// 日付の数字と曜日は、この画面では何もしない。
 /// 上のボタンは、まだ動かない。押しても何もしない。
+/// 月のタスクの追加・記号・削除は、JournalStore だけを通す。画面から直接は足さない。
+/// 翌月への繰越、タスク名の編集、並べ替え、履歴の画面は、ここでは作らない。
 struct MonthlyLogPageView: View {
     /// 表示する月（`yyyy-MM`）。
     let monthKey: String
@@ -22,6 +24,8 @@ struct MonthlyLogPageView: View {
     @State private var textByDateKey: [String: String] = [:]
     /// 中身のある Daily がある日。
     @State private var dailyDateKeys: Set<String> = []
+    /// その月のタスク。読み直しのときに入れる。編集中の下書きとは別。
+    @State private var tasks: [MonthlyTaskItem] = []
     /// 読み出しに失敗したとき true。
     @State private var loadFailed = false
     /// 保存に失敗したとき true。成功したら false。
@@ -40,13 +44,19 @@ struct MonthlyLogPageView: View {
     @State private var isMovingEdit = false
     /// 編集欄に、一度フォーカスが乗ったあとだけ、外れたときに保存する。
     @State private var editFocusLanded = false
-    /// どの行の編集欄にフォーカスがあるか。
-    @FocusState private var focusedDateKey: String?
+    /// 1行の編集欄か、タスクの名前欄か。タスク欄へ移っただけでは、1行は保存しない。
+    @FocusState private var editorFocus: MonthlyEditorFocus?
     /// 文章がある行を空にして確定する前の、確認待ちの日。無いときは nil。
     ///
     /// アラートを出しているあいだ、フォーカスは外れる。
     /// この値が入っているあいだは、外れても保存しない。もう一度確認も出さない。
     @State private var pendingDeleteDateKey: String? = nil
+    /// ＋ のあと、タスクの名前欄を出しているか。
+    @State private var isAddingTask = false
+    /// 追加しようとしているタスク名。失敗しても捨てない。読み直しでも消さない。
+    @State private var taskDraftTitle = ""
+    /// タスクを消す確認の対象。無いときは nil。キャンセルでは空に戻すだけ。
+    @State private var pendingDeleteTask: PendingTaskDelete? = nil
 
     /// 今日の帯は、読み出しのあとではなく、渡された今日の日付から計算する。
     /// 日付が変わっても、開いている月はそのまま。帯だけが動く。
@@ -60,25 +70,28 @@ struct MonthlyLogPageView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            logList
-            if loadFailed {
-                Text("記録を読み込めませんでした")
-                    .font(DesignTokens.Fonts.subText)
-                    .foregroundStyle(DesignTokens.inkSub)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(DesignTokens.Spacing.s)
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                topBar
+                logList
+                if loadFailed {
+                    Text("記録を読み込めませんでした")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(DesignTokens.Spacing.s)
+                }
+                if saveFailed {
+                    Text("保存できませんでした")
+                        .font(DesignTokens.Fonts.subText)
+                        .foregroundStyle(DesignTokens.inkSub)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(DesignTokens.Spacing.s)
+                }
+                taskSection(maxSectionHeight: geo.size.height * 0.4)
             }
-            if saveFailed {
-                Text("保存できませんでした")
-                    .font(DesignTokens.Fonts.subText)
-                    .foregroundStyle(DesignTokens.inkSub)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(DesignTokens.Spacing.s)
-            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background {
             GridPaperBackground()
         }
@@ -93,36 +106,76 @@ struct MonthlyLogPageView: View {
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
         }
-        .onChange(of: focusedDateKey) { oldFocus, newFocus in
+        .onChange(of: editorFocus) { oldFocus, newFocus in
             handleFocusChange(oldFocus: oldFocus, newFocus: newFocus)
         }
         .alert(
-            "この行を消しますか？",
-            isPresented: pendingDeletePresented,
-            presenting: pendingDeleteDateKey
-        ) { dateKey in
-            Button("消す", role: .destructive) {
-                confirmDelete(dateKey: dateKey)
+            promptTitle,
+            isPresented: promptPresented,
+            presenting: pagePrompt
+        ) { prompt in
+            switch prompt {
+            case .deleteLine(let dateKey):
+                Button("消す", role: .destructive) {
+                    confirmDelete(dateKey: dateKey)
+                }
+                .accessibilityIdentifier("monthlyLogDeleteConfirm")
+                Button("キャンセル", role: .cancel) {
+                    cancelDelete(dateKey: dateKey)
+                }
+                .accessibilityIdentifier("monthlyLogDeleteCancel")
+            case .deleteTask(let task):
+                Button("消す", role: .destructive) {
+                    let taskID = task.id
+                    performDeleteTask(id: taskID)
+                }
+                .accessibilityIdentifier("monthlyTaskDeleteConfirm")
+                Button("キャンセル", role: .cancel) {}
+                .accessibilityIdentifier("monthlyTaskDeleteCancel")
             }
-            .accessibilityIdentifier("monthlyLogDeleteConfirm")
-            Button("キャンセル", role: .cancel) {
-                cancelDelete(dateKey: dateKey)
+        } message: { prompt in
+            switch prompt {
+            case .deleteLine:
+                EmptyView()
+            case .deleteTask(let task):
+                Text(task.title)
             }
-            .accessibilityIdentifier("monthlyLogDeleteCancel")
-        } message: { _ in
-            EmptyView()
         }
     }
 
-    /// 確認のアラートを出しているか。閉じたときは、待っている日を消す。
+    /// いま出している確認。行の削除を、タスクの削除より先に出す。同時には出さない。
+    private var pagePrompt: MonthlyPagePrompt? {
+        if let pendingDeleteDateKey {
+            return .deleteLine(pendingDeleteDateKey)
+        }
+        if let pendingDeleteTask {
+            return .deleteTask(pendingDeleteTask)
+        }
+        return nil
+    }
+
+    /// 確認の見出し。行とタスクで文章を分ける。テストは、この文章で見分ける。
+    private var promptTitle: String {
+        switch pagePrompt {
+        case .deleteLine:
+            return "この行を消しますか？"
+        case .deleteTask:
+            return "タスクを消しますか"
+        case nil:
+            return ""
+        }
+    }
+
+    /// 確認を出しているか。閉じたときは、待っている対象を消す。
     ///
-    /// ボタンの処理は、表示したときの日付を受け取る。ここで日付を消しても、消す・戻すは実行できる。
-    private var pendingDeletePresented: Binding<Bool> {
+    /// ボタンの処理は、表示したときの値を受け取る。ここで消しても、消す・戻すは実行できる。
+    private var promptPresented: Binding<Bool> {
         Binding(
-            get: { pendingDeleteDateKey != nil },
+            get: { pagePrompt != nil },
             set: { showsAlert in
                 if showsAlert == false {
                     pendingDeleteDateKey = nil
+                    pendingDeleteTask = nil
                 }
             }
         )
@@ -175,6 +228,28 @@ struct MonthlyLogPageView: View {
         .tint(DesignTokens.accent)
         .accessibilityLabel(label)
         .accessibilityIdentifier(identifier)
+    }
+
+    /// 月のタスクはログのスクロールの外、ページの下に置く。高さはページの4割まで。
+    ///
+    /// 行が多いときは、タスクの中だけを滑らせる。ログは動かさない。
+    /// 1行を編集してキーボードが出ていても、記号はキーボードの上から届く。
+    /// ログを滑らせるとキーボードが閉じて、下書きが確定してしまう。
+    private func taskSection(maxSectionHeight: CGFloat) -> some View {
+        MonthlyTaskSection(
+            tasks: tasks,
+            maxSectionHeight: maxSectionHeight,
+            interactionsEnabled: loadFailed == false,
+            isAdding: $isAddingTask,
+            draftTitle: $taskDraftTitle,
+            editorFocus: $editorFocus,
+            logEditActive: editingDateKey != nil,
+            onBeginAdd: beginAddingTask,
+            onActivateComposer: activateTaskComposer,
+            onConfirm: confirmAddTask,
+            onCycle: cycleTask,
+            onRequestDelete: requestDeleteTask
+        )
     }
 
     private var logList: some View {
@@ -258,13 +333,13 @@ struct MonthlyLogPageView: View {
                 .font(DesignTokens.Fonts.bodyText)
                 .foregroundStyle(DesignTokens.ink)
                 .lineLimit(1)
-                .focused($focusedDateKey, equals: row.dateKey)
+                .focused($editorFocus, equals: .log(row.dateKey))
                 .submitLabel(.done)
                 .onSubmit {
                     commitAndClose()
                 }
                 .onAppear {
-                    focusedDateKey = row.dateKey
+                    editorFocus = .log(row.dateKey)
                 }
                 .frame(maxWidth: .infinity, minHeight: DesignTokens.gridSize, alignment: .leading)
                 .overlay(alignment: .bottom) {
@@ -300,7 +375,7 @@ struct MonthlyLogPageView: View {
     /// 今の行を空にして消すときは、確認を出して移動を止める。移動先は開かない。
     /// 確認を出しているあいだは、何もしない。
     private func editRow(dateKey: String) {
-        if pendingDeleteDateKey != nil {
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
             return
         }
         // 読み込み失敗中は文章を空で出している。編集すると、隠れた文章を上書きする。
@@ -308,7 +383,7 @@ struct MonthlyLogPageView: View {
             return
         }
         if editingDateKey == dateKey {
-            focusedDateKey = dateKey
+            editorFocus = .log(dateKey)
             return
         }
         if let current = editingDateKey {
@@ -327,14 +402,14 @@ struct MonthlyLogPageView: View {
             if saved == false {
                 isMovingEdit = false
                 editFocusLanded = true
-                focusedDateKey = current
+                editorFocus = .log(current)
                 return
             }
         }
         draftText = nextOriginal ?? ""
         editSession.begin(original: nextOriginal)
         editingDateKey = dateKey
-        focusedDateKey = dateKey
+        editorFocus = .log(dateKey)
     }
 
     /// キーボードの確定。成功したら編集を閉じる。失敗したら欄に残す。
@@ -344,7 +419,7 @@ struct MonthlyLogPageView: View {
         guard let current = editingDateKey else {
             return
         }
-        if pendingDeleteDateKey != nil {
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
             return
         }
         if draftDeletesExistingLine(dateKey: current) {
@@ -357,11 +432,11 @@ struct MonthlyLogPageView: View {
         if saved {
             editingDateKey = nil
             draftText = ""
-            focusedDateKey = nil
+            editorFocus = nil
             editSession.clear()
         } else {
             editFocusLanded = true
-            focusedDateKey = current
+            editorFocus = .log(current)
         }
         isMovingEdit = false
     }
@@ -369,12 +444,16 @@ struct MonthlyLogPageView: View {
     /// フォーカスが外れたときだけ確定する。行を移した直後の外れは無視する。
     ///
     /// 確認を出しているあいだは、何もしない。アラート自体がフォーカスを外すため。
+    /// タスクの名前欄へ移ったときは、ここでは保存も確認も出さない。
     /// 文章がある行を空にするときは、保存せず確認を出す。
-    private func handleFocusChange(oldFocus: String?, newFocus: String?) {
-        if pendingDeleteDateKey != nil {
+    private func handleFocusChange(oldFocus: MonthlyEditorFocus?, newFocus: MonthlyEditorFocus?) {
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
             return
         }
-        if let landed = newFocus {
+        if newFocus == .taskTitle {
+            return
+        }
+        if case .log(let landed) = newFocus {
             if let current = editingDateKey {
                 if landed == current {
                     editFocusLanded = true
@@ -386,7 +465,7 @@ struct MonthlyLogPageView: View {
         guard newFocus == nil else {
             return
         }
-        guard let previous = oldFocus else {
+        guard case .log(let previous) = oldFocus else {
             return
         }
         guard let current = editingDateKey else {
@@ -409,7 +488,7 @@ struct MonthlyLogPageView: View {
             editFocusLanded = false
             editSession.clear()
         } else {
-            focusedDateKey = previous
+            editorFocus = .log(previous)
         }
     }
 
@@ -447,7 +526,7 @@ struct MonthlyLogPageView: View {
                 if saved {
                     editingDateKey = nil
                     draftText = ""
-                    focusedDateKey = nil
+                    editorFocus = nil
                     editSession.clear()
                 } else {
                     editFocusLanded = true
@@ -481,13 +560,13 @@ struct MonthlyLogPageView: View {
         if saved {
             editingDateKey = nil
             draftText = ""
-            focusedDateKey = nil
+            editorFocus = nil
             editFocusLanded = false
             isMovingEdit = false
             editSession.clear()
         } else {
             editFocusLanded = true
-            focusedDateKey = dateKey
+            editorFocus = .log(dateKey)
         }
         pendingDeleteDateKey = nil
     }
@@ -502,7 +581,7 @@ struct MonthlyLogPageView: View {
             draftText = textByDateKey[dateKey] ?? ""
         }
         editingDateKey = nil
-        focusedDateKey = nil
+        editorFocus = nil
         editFocusLanded = false
         isMovingEdit = false
         pendingDeleteDateKey = nil
@@ -542,20 +621,151 @@ struct MonthlyLogPageView: View {
         return true
     }
 
-    /// 環境の読み書きの窓口から、月の行を読む。失敗してもクラッシュしない。
-    /// 編集中の下書きは変えない。
+    /// 環境の読み書きの窓口から、月の行と月のタスクを読む。失敗してもクラッシュしない。
+    /// 編集中の下書きと、タスクの名前欄は変えない。
     private func reload() {
         let store = JournalStore(context: modelContext)
         do {
             let content = try store.monthlyLogContent(monthKey: monthKey)
+            let storedTasks = try store.monthlyTasks(monthKey: monthKey)
             textByDateKey = content.textByDateKey
             dailyDateKeys = content.dailyDateKeys
+            tasks = storedTasks.map { task in
+                MonthlyTaskItem(task: task)
+            }
             loadFailed = false
         } catch {
             textByDateKey = [:]
             dailyDateKeys = []
+            tasks = []
             loadFailed = true
         }
+    }
+
+    /// タスクを触る前に、編集中の1行を確定する。別の行へ移るときと同じ。
+    ///
+    /// 確認が出ているあいだは、何もしない。
+    /// 空にして消す下書きなら、確認を出して止める。保存に失敗したら止める。
+    /// 保存は成功しても、そのあとの読み直しに失敗したら、タスク操作だけ止める。
+    /// 文章は、確認なしでは消さない。読み込みに失敗しているときも止める。
+    private func leaveLogEditForTaskAction() -> Bool {
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
+            return false
+        }
+        guard loadFailed == false else {
+            return false
+        }
+        guard let current = editingDateKey else {
+            return true
+        }
+        if draftDeletesExistingLine(dateKey: current) {
+            pendingDeleteDateKey = current
+            return false
+        }
+        isMovingEdit = true
+        editFocusLanded = false
+        let saved = saveDraft(dateKey: current)
+        if saved == false {
+            isMovingEdit = false
+            editFocusLanded = true
+            editorFocus = .log(current)
+            return MonthlyTaskActionRule.mayProceedAfterLogSave(
+                logSaveSucceeded: saved,
+                loadFailed: loadFailed
+            )
+        }
+        editingDateKey = nil
+        draftText = ""
+        editorFocus = nil
+        editSession.clear()
+        isMovingEdit = false
+        // 保存は成功しても、その中の読み直しが失敗したら、タスク操作だけ止める。
+        // 1行の保存結果（saveDraft の戻り値）は変えない。タスク名の下書きも残す。
+        return MonthlyTaskActionRule.mayProceedAfterLogSave(
+            logSaveSucceeded: saved,
+            loadFailed: loadFailed
+        )
+    }
+
+    /// ＋ で名前欄を出す。編集中の1行があれば、先に確定する。
+    private func beginAddingTask() {
+        guard leaveLogEditForTaskAction() else {
+            return
+        }
+        isAddingTask = true
+        editorFocus = .taskTitle
+    }
+
+    /// 編集中に名前欄を押したとき。確定できたら、名前欄へフォーカスを移す。
+    private func activateTaskComposer() {
+        guard leaveLogEditForTaskAction() else {
+            return
+        }
+        editorFocus = .taskTitle
+    }
+
+    /// 名前を確定して、月のタスクを1件足す。空白だけなら足さない。入力は残す。
+    private func confirmAddTask() {
+        guard leaveLogEditForTaskAction() else {
+            return
+        }
+        let store = JournalStore(context: modelContext)
+        do {
+            _ = try store.addMonthlyTask(monthKey: monthKey, title: taskDraftTitle)
+            taskDraftTitle = ""
+            isAddingTask = false
+            editorFocus = nil
+            saveFailed = false
+            reload()
+        } catch let storeError as JournalStoreError {
+            if storeError == .emptyTitle {
+                return
+            }
+            saveFailed = true
+        } catch {
+            saveFailed = true
+        }
+    }
+
+    /// 記号を1回進める。進み具合は JournalStore.cycleProgress だけが変える。
+    ///
+    /// その中で TaskRules.nextProgress が使われる。画面では進み具合を直接書かない。
+    private func cycleTask(id: UUID) {
+        guard leaveLogEditForTaskAction() else {
+            return
+        }
+        let store = JournalStore(context: modelContext)
+        do {
+            _ = try store.cycleProgress(taskID: id)
+            saveFailed = false
+            reload()
+        } catch {
+            saveFailed = true
+        }
+    }
+
+    /// 長押しの「削除」。確認を出しているあいだ、または編集の確定に失敗したときは出さない。
+    private func requestDeleteTask(_ item: MonthlyTaskItem) {
+        guard leaveLogEditForTaskAction() else {
+            return
+        }
+        pendingDeleteTask = PendingTaskDelete(id: item.id, title: item.title)
+    }
+
+    /// 確認の「消す」のあとだけ、タスクを消す。
+    private func performDeleteTask(id: UUID) {
+        guard loadFailed == false else {
+            return
+        }
+        let store = JournalStore(context: modelContext)
+        do {
+            try store.deleteTask(taskID: id)
+            saveFailed = false
+            reload()
+        } catch {
+            saveFailed = true
+        }
+        pendingDeleteTask = nil
     }
 
     private func monthTitle(monthText: String) -> String {
@@ -644,4 +854,18 @@ struct MonthlyLogPageView: View {
         }
         return parts.joined(separator: " ")
     }
+}
+
+/// タスク削除の確認が持っている対象。キャンセルでは、これを空に戻すだけ。
+private struct PendingTaskDelete: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+}
+
+/// 左ページの確認。1つのアラートにまとめる。同じ View にアラートを2つ付けない。
+private enum MonthlyPagePrompt: Equatable {
+    /// 文章がある行を空にして消す確認。
+    case deleteLine(String)
+    /// 月のタスクを消す確認。
+    case deleteTask(PendingTaskDelete)
 }

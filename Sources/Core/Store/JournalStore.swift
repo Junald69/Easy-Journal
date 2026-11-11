@@ -151,6 +151,21 @@ final class JournalStore {
         return try context.fetch(descriptor)
     }
 
+    /// その月の目次カードを全部取る。読むだけ。何も作らない。
+    ///
+    /// 検索条件は、種類（kindRaw）と月（monthKey）だけ。空を許す日付は入れない。
+    /// 同じ月のカードが複数あっても、ここでは選ばず、全部返す。
+    func monthlyIndexPages(inMonth monthKey: String) throws -> [Page] {
+        let monthlyKindRaw = PageKind.monthly.rawValue
+        let monthText = monthKey
+        let descriptor = FetchDescriptor<Page>(
+            predicate: #Predicate { page in
+                page.kindRaw == monthlyKindRaw && page.monthKey == monthText
+            }
+        )
+        return try context.fetch(descriptor)
+    }
+
     /// その日の目次カード。複数あれば、中身があるものの中で一番古いもの。無ければ nil。
     private func preferredDailyPage(dateKey: String) throws -> Page? {
         let fetched = try fetchPages(kindRaw: PageKind.daily.rawValue)

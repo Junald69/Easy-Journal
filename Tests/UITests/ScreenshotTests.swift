@@ -83,6 +83,110 @@ final class ScreenshotTests: XCTestCase {
         assertMonthlyFieldClosed(app, dateKey: dateKey)
     }
 
+    /// タスクを3つ足して □ ◧ ■ を並べ、削除の確認をキャンセルと消すで見る。
+    ///
+    /// アラートとボタンは firstMatch。押す前に isHittable を待つ。
+    /// キーボードの右矢印は使わない。確定は「追加」ボタン。
+    func testMonthlyTaskScreenshotAndDelete() {
+        let app = launchMonthly(includeSampleData: false)
+        waitForMonthlyLog(app)
+
+        addMonthlyTask("Cards", in: app)
+        addMonthlyTask("Tidy", in: app)
+        cycleMonthlyTask(title: "Tidy", from: "未完", to: "一部", in: app)
+        addMonthlyTask("Insurance", in: app)
+        cycleMonthlyTask(title: "Insurance", from: "未完", to: "一部", in: app)
+        cycleMonthlyTask(title: "Insurance", from: "一部", to: "完了", in: app)
+
+        let open = monthlyTaskButton("未完 Cards", in: app)
+        let partial = monthlyTaskButton("一部 Tidy", in: app)
+        let done = monthlyTaskButton("完了 Insurance", in: app)
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "未完 Cards がありません")
+        XCTAssertTrue(partial.waitForExistence(timeout: 5), "一部 Tidy がありません")
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "完了 Insurance がありません")
+        revealMonthlyTask(done, in: app)
+        waitUntilHittable(done, message: "完了 Insurance を押せません")
+        attachScreenshot(app, name: "06-monthly-task")
+
+        longPressMonthlyTask("Insurance", in: app)
+        tapMonthlyTaskDeleteMenu(in: app)
+        tapMonthlyTaskAlertButton("キャンセル", in: app)
+        XCTAssertTrue(done.waitForExistence(timeout: 5), "キャンセル後にタスクが消えました")
+        XCTAssertTrue(open.exists, "キャンセル後に Cards がありません")
+        XCTAssertTrue(partial.exists, "キャンセル後に Tidy がありません")
+
+        longPressMonthlyTask("Insurance", in: app)
+        tapMonthlyTaskDeleteMenu(in: app)
+        tapMonthlyTaskAlertButton("消す", in: app)
+        waitUntilGone(done, message: "消したタスクが残っています")
+        XCTAssertTrue(open.waitForExistence(timeout: 5), "消したあとに Cards がありません")
+        XCTAssertTrue(partial.waitForExistence(timeout: 5), "消したあとに Tidy がありません")
+    }
+
+    /// タスクが多くても、最後の記号はタスク欄の中を滑らせれば押せる。ログは押し出さない。
+    func testManyMonthlyTasksLastSymbolStaysReachable() {
+        let app = launchMonthly(includeSampleData: false)
+        waitForMonthlyLog(app)
+        let lastIndex = 7
+        var index = 0
+        while index <= lastIndex {
+            addMonthlyTask("t" + String(index), in: app)
+            index += 1
+        }
+
+        let last = revealLastMonthlyTask("未完 t" + String(lastIndex), in: app)
+        waitUntilHittable(last, message: "最後のタスクを押せません")
+        last.tap()
+        let advanced = monthlyTaskButton("一部 t" + String(lastIndex), in: app)
+        XCTAssertTrue(advanced.waitForExistence(timeout: 5), "最後のタスクの状態が変わりません")
+
+        let logScroll = app.scrollViews.containing(
+            .any,
+            identifier: "monthlyLogRow-2026-10-27"
+        ).firstMatch
+        XCTAssertTrue(logScroll.waitForExistence(timeout: 5), "ログのスクロールがありません")
+        XCTAssertGreaterThan(logScroll.frame.height, 80, "ログの行を滑らせる余地がありません")
+    }
+
+    /// 文章がある行を空にしたあと、タスクの記号を押す。
+    ///
+    /// 行を消す確認が出て、タスクの状態は変わらない。キャンセルで元の文章が戻る。
+    /// アラートとボタンは firstMatch。押す前に isHittable を待つ。
+    func testClearingLogLineThenTappingTaskSymbolKeepsTask() {
+        let dateKey = "2026-10-24"
+        let original = "資料"
+        let taskLabel = "未完 今月のねらい"
+        let app = launchMonthly()
+        waitForMonthlyLog(app)
+
+        let field = openMonthlyField(app, dateKey: dateKey)
+        deleteAllCharacters(in: field, knownText: original, app: app)
+
+        // 記号はページの下にあり、キーボードより上に出る。ログは滑らせない。
+        // 滑らせるとキーボードが閉じて、空の下書きが確定してしまう。
+        let symbol = waitForMonthlyTaskSymbolAboveKeyboard(taskLabel, in: app)
+        waitUntilHittable(symbol, message: "タスクの記号を押せません")
+        symbol.tap()
+
+        let alert = app.alerts["この行を消しますか？"].firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 10), "行を消す確認が出ません")
+        let unchanged = monthlyTaskButton(taskLabel, in: app)
+        XCTAssertTrue(unchanged.waitForExistence(timeout: 5), "タスクの状態が変わりました")
+        let advanced = monthlyTaskButton("一部 今月のねらい", in: app)
+        XCTAssertFalse(advanced.exists, "記号を押してタスクが進みました")
+
+        let cancel = alert.buttons["キャンセル"].firstMatch
+        waitUntilHittable(cancel, message: "キャンセルを押せません")
+        cancel.tap()
+
+        waitUntilGone(alert, message: "確認が閉じません")
+        waitUntilTextShows(app, dateKey: dateKey, text: original)
+        XCTAssertTrue(
+            monthlyTaskButton(taskLabel, in: app).waitForExistence(timeout: 5),
+            "キャンセル後にタスクの状態が変わりました"
+        )
+    }
+
     /// 文字を大きくしたときの月の画面。
     func testMonthlyLogLargeTextScreenshot() {
         let app = launchMonthly(extraArguments: [
@@ -93,16 +197,22 @@ final class ScreenshotTests: XCTestCase {
         attachScreenshot(app, name: "03-monthly-large-text")
     }
 
-    private func launchMonthly(extraArguments: [String] = []) -> XCUIApplication {
+    private func launchMonthly(
+        extraArguments: [String] = [],
+        includeSampleData: Bool = true
+    ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [
-            "-sampleData",
+        var arguments = [
             "-inMemoryStore",
             "-openPage",
             "monthly:2026-10",
             "-todayKey",
             "2026-10-27",
-        ] + extraArguments
+        ]
+        if includeSampleData {
+            arguments.insert("-sampleData", at: 0)
+        }
+        app.launchArguments = arguments + extraArguments
         app.launch()
         return app
     }
@@ -323,6 +433,165 @@ final class ScreenshotTests: XCTestCase {
         var attempt = 0
         while attempt < 6 {
             app.swipeDown()
+            attempt += 1
+        }
+    }
+
+    private func addMonthlyTask(_ title: String, in app: XCUIApplication) {
+        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        revealMonthlyTask(addButton, in: app)
+        waitUntilHittable(addButton, message: "タスクの追加を押せません")
+        addButton.tap()
+        let field = app.textFields["monthlyTaskTitleField"].firstMatch
+        waitUntilHittable(field, message: "タスクの名前欄を押せません")
+        field.tap()
+        field.typeText(title)
+        let confirm = app.descendants(matching: .any)["monthlyTaskConfirmButton"].firstMatch
+        revealMonthlyTask(confirm, in: app)
+        if confirm.isHittable {
+            waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
+            confirm.tap()
+        } else if field.isHittable {
+            field.typeText("\n")
+        } else {
+            waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
+            confirm.tap()
+        }
+        let created = monthlyTaskButton("未完 " + title, in: app)
+        XCTAssertTrue(created.waitForExistence(timeout: 5), "追加後の未完が見つかりません: " + title)
+    }
+
+    private func cycleMonthlyTask(title: String, from: String, to: String, in app: XCUIApplication) {
+        let current = monthlyTaskButton(from + " " + title, in: app)
+        revealMonthlyTask(current, in: app)
+        waitUntilHittable(current, message: from + " " + title + " を押せません")
+        current.tap()
+        let updated = monthlyTaskButton(to + " " + title, in: app)
+        XCTAssertTrue(updated.waitForExistence(timeout: 5), to + " " + title)
+    }
+
+    private func monthlyTaskButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    private func longPressMonthlyTask(_ title: String, in app: XCUIApplication) {
+        let identified = app.descendants(matching: .any)["monthlyTaskLabel-" + title].firstMatch
+        let target: XCUIElement
+        if identified.waitForExistence(timeout: 2) {
+            target = identified
+        } else {
+            target = app.staticTexts[title].firstMatch
+        }
+        revealMonthlyTask(target, in: app)
+        waitUntilHittable(target, message: title + " を長押しできません")
+        target.press(forDuration: 1.2)
+    }
+
+    private func tapMonthlyTaskDeleteMenu(in app: XCUIApplication) {
+        let identified = app.descendants(matching: .any)["monthlyTaskDeleteAction"].firstMatch
+        if identified.waitForExistence(timeout: 3) {
+            waitUntilHittable(identified, message: "削除を押せません")
+            identified.tap()
+            return
+        }
+        let labeled = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", "削除")
+        ).firstMatch
+        XCTAssertTrue(labeled.waitForExistence(timeout: 3), "削除のメニューがありません")
+        waitUntilHittable(labeled, message: "削除を押せません")
+        labeled.tap()
+    }
+
+    private func tapMonthlyTaskAlertButton(_ title: String, in app: XCUIApplication) {
+        let alert = app.alerts["タスクを消しますか"].firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "タスクの確認が出ません")
+        let button = alert.buttons[title].firstMatch
+        waitUntilHittable(button, message: title + " を押せません")
+        button.tap()
+    }
+
+    /// 最後のタスクが画面の外なら、タスク欄の中だけを滑らせて出す。ログは滑らせない。
+    private func revealLastMonthlyTask(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        let list = app.scrollViews["monthlyTaskList"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "タスクの一覧がありません")
+        var symbol = monthlyTaskButton(label, in: app)
+        var attempt = 0
+        while attempt < 8 {
+            symbol = monthlyTaskButton(label, in: app)
+            if symbol.exists, taskSymbolIsAboveKeyboard(symbol, in: app) {
+                return symbol
+            }
+            list.swipeUp()
+            attempt += 1
+        }
+        XCTFail("最後のタスクを一覧の中に出せませんでした")
+        return symbol
+    }
+
+    /// 記号の枠が、画面の中でキーボードより上になるまで待つ。スクロールはしない。
+    ///
+    /// 枠が無効なあいだは isHittable を見ない。見ると、それだけでテストが落ちる。
+    private func waitForMonthlyTaskSymbolAboveKeyboard(
+        _ label: String,
+        in app: XCUIApplication
+    ) -> XCUIElement {
+        var symbol = monthlyTaskButton(label, in: app)
+        XCTAssertTrue(symbol.waitForExistence(timeout: 5), "タスクの記号がありません")
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline {
+            symbol = monthlyTaskButton(label, in: app)
+            if symbol.exists, taskSymbolIsAboveKeyboard(symbol, in: app) {
+                return symbol
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        XCTFail("タスクの記号がキーボードの上にありません")
+        return symbol
+    }
+
+    /// 記号の枠が、画面の中でキーボードより上か。枠が無効なら false。
+    private func taskSymbolIsAboveKeyboard(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        let frame = element.frame
+        if frame.isNull || frame.isInfinite || frame.width < 2 || frame.height < 2 {
+            return false
+        }
+        let window = app.frame
+        var visibleBottom = window.maxY
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists {
+            let kb = keyboard.frame
+            if kb.isNull == false && kb.isInfinite == false && kb.height > 1 && kb.minY.isFinite {
+                visibleBottom = min(visibleBottom, kb.minY)
+            }
+        }
+        if frame.minY < window.minY + 1 {
+            return false
+        }
+        if frame.maxY > visibleBottom - 2 {
+            return false
+        }
+        if frame.minX > window.maxX || frame.maxX < window.minX {
+            return false
+        }
+        return true
+    }
+
+    /// 画面の外なら、上へ滑らせて見えるようにする。見えているときは滑らせない。
+    private func revealMonthlyTask(_ element: XCUIElement, in app: XCUIApplication, attempts: Int = 8) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5), "要素がありません")
+        var attempt = 0
+        while element.isHittable == false && attempt < attempts {
+            let ready = NSPredicate(block: { evaluated, _ in
+                guard let candidate = evaluated as? XCUIElement else {
+                    return false
+                }
+                return candidate.isHittable
+            })
+            let expectation = XCTNSPredicateExpectation(predicate: ready, object: element)
+            if XCTWaiter().wait(for: [expectation], timeout: 1) == .completed {
+                return
+            }
+            app.swipeUp()
             attempt += 1
         }
     }
