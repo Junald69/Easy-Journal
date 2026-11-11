@@ -87,6 +87,20 @@ enum DateKey {
         shiftedDayKey(byAdding: -1, to: key)
     }
 
+    /// 次の月の月キー。不正な月キーなら nil。
+    ///
+    /// 12月の次は翌年の1月。日は見ない。月キーは、その月の1日としてずらす。
+    static func nextMonthKey(after key: String) -> String? {
+        shiftedMonthKey(byAdding: 1, to: key)
+    }
+
+    /// 前の月の月キー。不正な月キーなら nil。
+    ///
+    /// 1月の前は前年の12月。日は見ない。月キーは、その月の1日としてずらす。
+    static func previousMonthKey(before key: String) -> String? {
+        shiftedMonthKey(byAdding: -1, to: key)
+    }
+
     /// その月の日数。不正な月キーなら nil。
     static func daysInMonth(monthKey key: String) -> Int? {
         guard let parts = monthParts(key), let calendar = gregorianUTC() else { return nil }
@@ -140,6 +154,23 @@ enum DateKey {
         calendar.timeZone = timeZone
         calendar.locale = Locale(identifier: "en_US_POSIX")
         return calendar
+    }
+
+    /// 月キーを月数だけずらす。不正な月キーなら nil。1日同士なので、月末のあふれは起きない。
+    private static func shiftedMonthKey(byAdding months: Int, to key: String) -> String? {
+        guard let parts = monthParts(key), let calendar = gregorianUTC() else { return nil }
+        guard let date = utcDate(year: parts.year, month: parts.month, day: 1, calendar: calendar) else {
+            return nil
+        }
+        guard let shifted = calendar.date(
+            byAdding: .month,
+            value: months,
+            to: date,
+            wrappingComponents: false
+        ) else {
+            return nil
+        }
+        return monthKey(from: shifted, calendar: calendar)
     }
 
     private static func shiftedDayKey(byAdding days: Int, to key: String) -> String? {

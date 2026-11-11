@@ -7,14 +7,19 @@ import SwiftUI
 /// 文章がある行を空にして確定するときは、消す前に確認する。
 /// 編集を始めたときの文字は別に覚える。読み直しが失敗して表示が空でも、その文字で確認する。
 /// 日付の数字と曜日は、この画面では何もしない。
-/// 上のボタンは、まだ動かない。押しても何もしない。
+/// ☰ と +Daily は、まだ動かない。押しても何もしない。
+/// ◀ で前の月、▶ で次の月。開いている月は `displayedMonthKey`。Router も同じ月にする。
+/// 移る前に、編集中の1行は今までと同じ保存ルールで片付ける。失敗したら月は移さない。
+/// 月が移れたときだけ、その月のページを探す。無ければ作る。同じ月は増やさない。
 /// 月のタスクの追加・記号・削除は、JournalStore だけを通す。画面から直接は足さない。
 /// 翌月への繰越、タスク名の編集、並べ替え、履歴の画面は、ここでは作らない。
 struct MonthlyLogPageView: View {
-    /// 表示する月（`yyyy-MM`）。
+    /// 起動時に開いた月（`yyyy-MM`）。移ったあとは `displayedMonthKey` を見る。
     let monthKey: String
     /// 今日の日付キー（`yyyy-MM-dd`）。帯とスクロールに使う。
     let todayKey: String
+    /// 移れたときだけ呼ぶ。Router の月を、画面と同じにする。
+    let openMonth: (String) -> Void
 
     @Environment(\.modelContext) private var modelContext
     /// アプリが前面から離れたときに、編集中の行を確定する。
@@ -57,12 +62,26 @@ struct MonthlyLogPageView: View {
     @State private var taskDraftTitle = ""
     /// タスクを消す確認の対象。無いときは nil。キャンセルでは空に戻すだけ。
     @State private var pendingDeleteTask: PendingTaskDelete? = nil
+    /// ◀▶ が成功したあとの月。まだ移っていないときは nil で、渡された月を出す。
+    ///
+    /// 失敗した移動では変えない。変えたときは、Router も同じ月にする。
+    @State private var movedMonthKey: String? = nil
+    /// 移る先を読めなかったとき true。今の月の行は消さない。
+    @State private var moveLoadFailed = false
+
+    /// いま画面に出している月。移ったあとはその月。それまでは、起動時に渡された月。
+    private var displayedMonthKey: String {
+        if let movedMonthKey {
+            return movedMonthKey
+        }
+        return monthKey
+    }
 
     /// 今日の帯は、読み出しのあとではなく、渡された今日の日付から計算する。
     /// 日付が変わっても、開いている月はそのまま。帯だけが動く。
     private var rows: [MonthlyLogRow] {
         MonthlyLogRows.make(
-            monthKey: monthKey,
+            monthKey: displayedMonthKey,
             textByDateKey: textByDateKey,
             dailyDateKeys: dailyDateKeys,
             todayKey: todayKey
@@ -74,7 +93,7 @@ struct MonthlyLogPageView: View {
             VStack(spacing: 0) {
                 topBar
                 logList
-                if loadFailed {
+                if loadFailed || moveLoadFailed {
                     Text("記録を読み込めませんでした")
                         .font(DesignTokens.Fonts.subText)
                         .foregroundStyle(DesignTokens.inkSub)
@@ -99,9 +118,6 @@ struct MonthlyLogPageView: View {
         .accessibilityIdentifier("monthlyLogScreen")
         .onAppear {
             reload()
-        }
-        .onChange(of: monthKey) { _, _ in
-            handleMonthChange()
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhase(newPhase)
@@ -186,9 +202,10 @@ struct MonthlyLogPageView: View {
             barButton(
                 systemName: "line.3.horizontal",
                 label: "目次",
-                identifier: "monthlyMenuButton"
+                identifier: "monthlyMenuButton",
+                action: {}
             )
-            Text(monthTitle(monthText: monthKey))
+            Text(monthTitle(monthText: displayedMonthKey))
                 .font(DesignTokens.Fonts.heading)
                 .foregroundStyle(DesignTokens.ink)
                 .lineLimit(1)
@@ -197,12 +214,14 @@ struct MonthlyLogPageView: View {
             barButton(
                 systemName: "chevron.left",
                 label: "前の月",
-                identifier: "monthlyPreviousButton"
+                identifier: "monthlyPreviousButton",
+                action: { moveMonth(goingForward: false) }
             )
             barButton(
                 systemName: "chevron.right",
                 label: "次の月",
-                identifier: "monthlyNextButton"
+                identifier: "monthlyNextButton",
+                action: { moveMonth(goingForward: true) }
             )
             Button(action: {}) {
                 Text("+Daily")
@@ -218,9 +237,14 @@ struct MonthlyLogPageView: View {
         .padding(.vertical, DesignTokens.Spacing.s)
     }
 
-    /// まだ動かないボタン。見た目は押せる。中身は空。
-    private func barButton(systemName: String, label: String, identifier: String) -> some View {
-        Button(action: {}) {
+    /// 上のボタン。目次は、まだ中身が空。◀▶ は月を移す。
+    private func barButton(
+        systemName: String,
+        label: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
             Image(systemName: systemName)
                 .font(DesignTokens.Fonts.bodyText)
         }
@@ -250,6 +274,7 @@ struct MonthlyLogPageView: View {
             onCycle: cycleTask,
             onRequestDelete: requestDeleteTask
         )
+        .id(displayedMonthKey)
     }
 
     private var logList: some View {
@@ -269,6 +294,7 @@ struct MonthlyLogPageView: View {
             }
             .scrollContentBackground(.hidden)
             .scrollDismissesKeyboard(.interactively)
+            .id(displayedMonthKey)
             .onAppear {
                 scrollToToday(in: rows, proxy: proxy)
             }
@@ -277,7 +303,7 @@ struct MonthlyLogPageView: View {
                     proxy.scrollTo(newKey, anchor: .top)
                 }
             }
-            .onChange(of: monthKey) { _, _ in
+            .onChange(of: displayedMonthKey) { _, _ in
                 scrollToToday(in: rows, proxy: proxy)
             }
         }
@@ -511,30 +537,163 @@ struct MonthlyLogPageView: View {
         _ = saveDraft(dateKey: current)
     }
 
-    /// 月が変わったら、編集中の行を確定してから読み直す。
+    /// ◀▶。判定の順は `MonthMoveRule.result` と同じ。
     ///
-    /// 文章がある行を空にする下書きは保存しない。元の文字に戻して、編集を閉じる。
-    /// 空でない下書きは、今までどおり保存する。
-    private func handleMonthChange() {
+    /// 確認が出ているあいだは、何もしない。
+    /// 空にして消す下書きは、確認を出して止める。確認なしでは消さない。
+    /// 1行の保存、またはそのあとの読み込みに失敗したら、入力を残して月は移さない。
+    /// タスクの追加欄に空白以外の文字があるときも、その文字を残して月は移さない。
+    /// 移れるときだけ、移る先の月ページを探す。無ければ作る。読めなければ移さない。
+    private func moveMonth(goingForward: Bool) {
+        if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
+            return
+        }
+        guard let destination = MonthMoveRule.destination(
+            from: displayedMonthKey,
+            goingForward: goingForward
+        ) else {
+            return
+        }
+        if destination == displayedMonthKey {
+            return
+        }
+        let needsDelete: Bool
         if let current = editingDateKey {
-            if draftDeletesExistingLine(dateKey: current) {
-                cancelDelete(dateKey: current)
-            } else {
-                isMovingEdit = true
-                editFocusLanded = false
-                let saved = saveDraft(dateKey: current)
-                if saved {
-                    editingDateKey = nil
-                    draftText = ""
-                    editorFocus = nil
-                    editSession.clear()
-                } else {
-                    editFocusLanded = true
-                }
-                isMovingEdit = false
+            needsDelete = draftDeletesExistingLine(dateKey: current)
+        } else {
+            needsDelete = false
+        }
+        let before = MonthMoveRule.phaseBeforeSideEffects(
+            isEditingLog: editingDateKey != nil,
+            needsDeleteConfirmation: needsDelete,
+            taskDraft: taskDraftTitle
+        )
+        switch before {
+        case .confirmDelete:
+            if let current = editingDateKey {
+                pendingDeleteDateKey = current
+            }
+            return
+        case .keepTaskDraft:
+            return
+        case .prepareDestination:
+            prepareAndMove(to: destination)
+        case .saveLog:
+            saveLogThenContinueMove(to: destination)
+        case .stayAfterLogFailure:
+            return
+        }
+    }
+
+    /// 編集中の1行を保存してから、移動を続けるか止めるかを決める。
+    ///
+    /// 保存に失敗したとき、読み込みに失敗したときは、下書きを残して止める。
+    private func saveLogThenContinueMove(to destination: String) {
+        guard let current = editingDateKey else {
+            return
+        }
+        isMovingEdit = true
+        editFocusLanded = false
+        let saved = saveDraft(dateKey: current)
+        let after = MonthMoveRule.phaseAfterLogSave(
+            logSaveSucceeded: saved,
+            loadFailed: loadFailed,
+            taskDraft: taskDraftTitle
+        )
+        if MonthMoveRule.mayDiscardLogDraft(after) {
+            closeLogEditorAfterSuccessfulSave()
+        } else {
+            keepLogEditor(on: current)
+        }
+        switch after {
+        case .prepareDestination:
+            prepareAndMove(to: destination)
+        case .keepTaskDraft, .stayAfterLogFailure, .confirmDelete, .saveLog:
+            return
+        }
+    }
+
+    /// 1行の保存が成功したあと、編集欄だけ閉じる。タスクの追加欄は触らない。
+    private func closeLogEditorAfterSuccessfulSave() {
+        editingDateKey = nil
+        draftText = ""
+        editorFocus = nil
+        editFocusLanded = false
+        isMovingEdit = false
+        editSession.clear()
+    }
+
+    /// 保存か読み込みに失敗したあと、入力欄を開いたままにする。
+    private func keepLogEditor(on dateKey: String) {
+        isMovingEdit = false
+        editFocusLanded = true
+        editorFocus = .log(dateKey)
+    }
+
+    /// 移る先の月ページを用意し、読めたときだけ画面を移す。
+    ///
+    /// 保存に失敗したら「保存できませんでした」。今の月のまま。
+    /// 読めなかったら「記録を読み込めませんでした」。今の月の行と入力は残す。
+    private func prepareAndMove(to destination: String) {
+        let store = JournalStore(context: modelContext)
+        var pageSaveSucceeded = true
+        do {
+            _ = try store.findOrCreateMonthly(monthKey: destination)
+        } catch {
+            pageSaveSucceeded = false
+            saveFailed = true
+        }
+        var content = MonthlyLogContent(textByDateKey: [:], dailyDateKeys: [])
+        var storedTasks: [JournalTask] = []
+        var destinationLoadSucceeded = false
+        if pageSaveSucceeded {
+            do {
+                content = try store.monthlyLogContent(monthKey: destination)
+                storedTasks = try store.monthlyTasks(monthKey: destination)
+                destinationLoadSucceeded = true
+            } catch {
+                destinationLoadSucceeded = false
+                moveLoadFailed = true
             }
         }
-        reload()
+        let ready = MonthMoveRule.shouldCommitMove(
+            pageSaveSucceeded: pageSaveSucceeded,
+            destinationLoadSucceeded: destinationLoadSucceeded
+        )
+        if ready == false {
+            return
+        }
+        applyDestination(content, tasks: storedTasks, monthKey: destination)
+    }
+
+    /// 移れたときだけ、前の月の編集状態を捨てて、移る先の中身を出す。
+    ///
+    /// タスク欄の未確定の文字は、ここに来る前に無い。空白だけなら、ここで閉じる。
+    private func applyDestination(
+        _ content: MonthlyLogContent,
+        tasks storedTasks: [JournalTask],
+        monthKey destination: String
+    ) {
+        editingDateKey = nil
+        draftText = ""
+        editSession.clear()
+        isMovingEdit = false
+        editFocusLanded = false
+        editorFocus = nil
+        pendingDeleteDateKey = nil
+        pendingDeleteTask = nil
+        isAddingTask = false
+        taskDraftTitle = ""
+        textByDateKey = content.textByDateKey
+        dailyDateKeys = content.dailyDateKeys
+        tasks = storedTasks.map { task in
+            MonthlyTaskItem(task: task)
+        }
+        loadFailed = false
+        saveFailed = false
+        moveLoadFailed = false
+        movedMonthKey = destination
+        openMonth(destination)
     }
 
     /// 今の下書きを確定すると、保存してある文章が消えるとき true。
@@ -626,19 +785,21 @@ struct MonthlyLogPageView: View {
     private func reload() {
         let store = JournalStore(context: modelContext)
         do {
-            let content = try store.monthlyLogContent(monthKey: monthKey)
-            let storedTasks = try store.monthlyTasks(monthKey: monthKey)
+            let content = try store.monthlyLogContent(monthKey: displayedMonthKey)
+            let storedTasks = try store.monthlyTasks(monthKey: displayedMonthKey)
             textByDateKey = content.textByDateKey
             dailyDateKeys = content.dailyDateKeys
             tasks = storedTasks.map { task in
                 MonthlyTaskItem(task: task)
             }
             loadFailed = false
+            moveLoadFailed = false
         } catch {
             textByDateKey = [:]
             dailyDateKeys = []
             tasks = []
             loadFailed = true
+            moveLoadFailed = false
         }
     }
 
@@ -711,7 +872,7 @@ struct MonthlyLogPageView: View {
         }
         let store = JournalStore(context: modelContext)
         do {
-            _ = try store.addMonthlyTask(monthKey: monthKey, title: taskDraftTitle)
+            _ = try store.addMonthlyTask(monthKey: displayedMonthKey, title: taskDraftTitle)
             taskDraftTitle = ""
             isAddingTask = false
             editorFocus = nil
