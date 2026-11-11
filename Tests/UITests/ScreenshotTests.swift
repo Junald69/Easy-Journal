@@ -711,8 +711,10 @@ final class ScreenshotTests: XCTestCase {
 
         let second = openMonthlyField(app, dateKey: "2026-10-25")
         second.typeText("NextLine")
-        // 目次ボタンは、キーボードを閉じないことがある。ログをずらすと焦点が外れる。
-        app.swipeDown()
+        // キーボードが開いていると、◀▶ の最初の1回はキーボードを閉じるだけ、のことがある。
+        // その焦点外れで保存して閉じる。月は動かない。
+        tapMonthButton("monthlyNextButton", in: app)
+        waitForMonthTitle("2026年 10月", in: app)
         let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
         let closed = NSPredicate(format: "exists == false")
         let closedExpectation = XCTNSPredicateExpectation(predicate: closed, object: stillEditing)
