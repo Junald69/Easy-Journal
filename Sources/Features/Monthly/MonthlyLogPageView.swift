@@ -182,6 +182,8 @@ struct MonthlyLogPageView: View {
             }
             restoreLogFocusDateKey = current
             let dateKey = current
+            // 名前欄が無効になるのと同じ更新で焦点を移すと、無効な欄に残る。
+            // 更新のあと、この画面だけが一言日記へ戻す。
             DispatchQueue.main.async {
                 guard restoreLogFocusDateKey == dateKey else {
                     return
@@ -553,7 +555,18 @@ struct MonthlyLogPageView: View {
             if newFocus == .log(dateKey) {
                 editFocusLanded = true
                 isMovingEdit = false
-                restoreLogFocusDateKey = nil
+                // 無効になった名前欄が、その直後に焦点を空にすることがある。
+                // 一言日記に乗ったまま残っているときだけ、戻し終わりにする。
+                DispatchQueue.main.async {
+                    guard restoreLogFocusDateKey == dateKey else {
+                        return
+                    }
+                    if editorFocus == .log(dateKey) {
+                        restoreLogFocusDateKey = nil
+                    } else {
+                        editorFocus = .log(dateKey)
+                    }
+                }
                 return
             }
             editorFocus = .log(dateKey)

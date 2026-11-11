@@ -636,22 +636,20 @@ final class ScreenshotTests: XCTestCase {
         let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
 
-        // 1回で消す。1文字ずつ消すと、焦点が戻った一言日記の欄まで消える。
-        taskField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Temp".count))
-        let taskAfter = taskField.value as? String ?? ""
-        XCTAssertFalse(taskAfter.contains("Temp"), "タスク名が残っています: " + taskAfter)
-        let logStill = field.value as? String ?? ""
+        clearTaskTitle(taskField, knownText: "Temp", app: app)
+        let logField = revealLogEditor(app, dateKey: dateKey)
+        let logStill = logField.value as? String ?? ""
         XCTAssertTrue(logStill.contains("FocusLog"), "一言日記の編集欄が閉じました: " + logStill)
 
         let focused = NSPredicate(format: "hasKeyboardFocus == true")
-        let ready = XCTNSPredicateExpectation(predicate: focused, object: field)
+        let ready = XCTNSPredicateExpectation(predicate: focused, object: logField)
         XCTAssertEqual(
             XCTWaiter().wait(for: [ready], timeout: 5),
             .completed,
             "一言日記の編集欄に焦点が戻りません"
         )
-        field.typeText("Z")
-        let resumed = field.value as? String ?? ""
+        logField.typeText("Z")
+        let resumed = logField.value as? String ?? ""
         XCTAssertTrue(resumed.contains("FocusLogZ"), "焦点を戻した欄に書けません: " + resumed)
         waitForMonthTitle("2026年 10月", in: app)
     }
@@ -927,6 +925,65 @@ final class ScreenshotTests: XCTestCase {
             dateKey + " の編集欄を押せません"
         )
         field.tap()
+        return field
+    }
+
+    /// タスク名を、delete キーで空にする。空と、欄の案内「タスク」は入力なしとみなす。
+    ///
+    /// 全文の一部だけ消えると、未確定のまま残り、焦点は戻らない。空になってから次へ進む。
+    private func clearTaskTitle(_ field: XCUIElement, knownText: String, app: XCUIApplication) {
+        var attempt = 0
+        while attempt < 4 {
+            let shown = field.value as? String ?? ""
+            if isClearedTaskTitle(shown) && attempt > 0 {
+                break
+            }
+            var deleteCount = shown.count
+            if shown == "タスク" {
+                break
+            }
+            if deleteCount < knownText.count {
+                deleteCount = knownText.count
+            }
+            deleteCount += 2
+            let endOfField = field.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5))
+            endOfField.tap()
+            let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue, count: deleteCount)
+            field.typeText(deletes)
+            attempt += 1
+        }
+        let afterDeletes = field.value as? String ?? ""
+        if isClearedTaskTitle(afterDeletes) == false {
+            selectAllThenDelete(in: field, app: app)
+        }
+        let leftover = field.value as? String ?? ""
+        XCTAssertTrue(isClearedTaskTitle(leftover), "タスク名が空ではありません: " + leftover)
+    }
+
+    /// 入力が残っていないとき true。案内の「タスク」だけは空とみなす。
+    private func isClearedTaskTitle(_ shown: String) -> Bool {
+        if shown.isEmpty || shown == "タスク" {
+            return true
+        }
+        return false
+    }
+
+    /// 一言日記の編集欄を探す。キーボードやタスク欄のうしろにいるときは、見えるまでずらす。
+    private func revealLogEditor(_ app: XCUIApplication, dateKey: String) -> XCUIElement {
+        let field = app.descendants(matching: .textField)["monthlyLogText-" + dateKey]
+        var attempt = 0
+        while field.exists == false && attempt < 4 {
+            if attempt % 2 == 0 {
+                app.swipeUp()
+            } else {
+                app.swipeDown()
+            }
+            attempt += 1
+        }
+        XCTAssertTrue(
+            field.waitForExistence(timeout: 5),
+            dateKey + " の編集欄がありません"
+        )
         return field
     }
 
