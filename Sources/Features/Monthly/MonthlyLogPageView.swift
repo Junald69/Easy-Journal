@@ -78,6 +78,11 @@ struct MonthlyLogPageView: View {
     /// 名前欄が無効になった瞬間に焦点が空になると、編集を保存して閉じてしまう。
     /// この日付があるあいだは、その空では保存しない。
     @State private var restoreLogFocusDateKey: String? = nil
+    /// タスク欄で月を止めているあいだ、および焦点を一言日記へ戻しているあいだ true。
+    ///
+    /// このあいだ焦点が外れても、編集欄は閉じない。下書きの文字も捨てない。
+    /// 保存が走っても、行は編集のまま残す。
+    @State private var holdLogEditor = false
     /// 移動の準備で出た失敗。成功したら `none`。保存と読み込みは同時には出さない。
     @State private var moveProblem: MonthMoveRule.MoveProblem = .none
     /// 新しい失敗と、前の失敗を区別するための番号。成功では増やさない。
@@ -180,6 +185,7 @@ struct MonthlyLogPageView: View {
             guard let current = editingDateKey else {
                 return
             }
+            holdLogEditor = true
             restoreLogFocusDateKey = current
             let dateKey = current
             // 名前欄が無効になるのと同じ更新で焦点を移すと、無効な欄に残る。
@@ -555,21 +561,26 @@ struct MonthlyLogPageView: View {
             if newFocus == .log(dateKey) {
                 editFocusLanded = true
                 isMovingEdit = false
-                // 無効になった名前欄が、その直後に焦点を空にすることがある。
-                // 一言日記に乗ったまま残っているときだけ、戻し終わりにする。
+                // 乗った直後の空振りでは閉じない。乗ったままなら、次の更新で保護を外す。
                 DispatchQueue.main.async {
                     guard restoreLogFocusDateKey == dateKey else {
                         return
                     }
                     if editorFocus == .log(dateKey) {
                         restoreLogFocusDateKey = nil
+                        holdLogEditor = false
                     } else {
                         editorFocus = .log(dateKey)
                     }
                 }
                 return
             }
+            // 名前を空にしたあと、無効な欄に残った焦点は一言日記へ戻す。保存はしない。
             editorFocus = .log(dateKey)
+            return
+        }
+        if holdLogEditor || taskDraftMoveBlocked {
+            // 止めているあいだ、タスク欄へ焦点が移っても一言日記は閉じない。
             return
         }
         if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
@@ -622,6 +633,11 @@ struct MonthlyLogPageView: View {
             return
         }
         let saved = saveDraft(dateKey: previous)
+        if holdLogEditor || taskDraftMoveBlocked {
+            // タスク欄で止めているあいだに保存されても、編集は閉じない。文字も残す。
+            editorFocus = .log(previous)
+            return
+        }
         if saved {
             editingDateKey = nil
             draftText = ""
@@ -746,6 +762,9 @@ struct MonthlyLogPageView: View {
     /// タスク欄の未確定で月を止める。1行は保存しない。編集も閉じない。入力も残す。
     private func blockMoveForTaskDraft() {
         taskDraftMoveBlocked = true
+        if editingDateKey != nil {
+            holdLogEditor = true
+        }
         isAddingTask = true
         editorFocus = .taskTitle
         taskDraftBlockFocused = true
@@ -856,6 +875,7 @@ struct MonthlyLogPageView: View {
         taskDraftTitle = ""
         taskDraftMoveBlocked = false
         restoreLogFocusDateKey = nil
+        holdLogEditor = false
         taskDraftBlockFocused = false
     }
 

@@ -637,6 +637,8 @@ final class ScreenshotTests: XCTestCase {
         let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
         XCTAssertTrue(field.waitForExistence(timeout: 5), "止めた時点で一言日記の編集欄が閉じました")
+        let blockedText = field.value as? String ?? ""
+        XCTAssertTrue(blockedText.contains("FocusLog"), "止めた時点で下書きが消えました: " + blockedText)
 
         clearTaskTitle(taskField, knownText: "Temp", app: app)
         let logField = app.descendants(matching: .textField)["monthlyLogText-" + dateKey]
