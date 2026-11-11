@@ -51,7 +51,7 @@ final class MonthNavigationStoreTests: XCTestCase {
 
     /// 2027年1月→2026年12月。前の年に戻る。12月の記録は残る。
     func testJanuaryMovesToPreviousDecember() throws {
-        let (store, _) = try makeStore()
+        let (store, _, _) = try makeStore()
         _ = try store.addMonthlyTask(monthKey: "2026-12", title: "年の瀬")
         try store.setLogLine(dateKey: "2027-01-01", text: "元日")
         let decemberKey = try XCTUnwrap(DateKey.previousMonthKey(before: "2027-01"))
@@ -87,7 +87,7 @@ final class MonthNavigationStoreTests: XCTestCase {
 
     /// 月ごとの1行とタスクは混ざらない。移ったあとも、元の月の記録は残る。
     func testMonthsDoNotMixAndOriginalRecordsRemain() throws {
-        let (store, _) = try makeStore()
+        let (store, _, _) = try makeStore()
         try store.setLogLine(dateKey: "2026-10-03", text: "十月の3日")
         try store.setLogLine(dateKey: "2026-11-03", text: "十一月の3日")
         _ = try store.addMonthlyTask(monthKey: "2026-10", title: "十月のタスク")
@@ -188,7 +188,8 @@ final class MonthNavigationStoreTests: XCTestCase {
     private func makeStore() throws -> (store: JournalStore, context: ModelContext, container: ModelContainer) {
         let container = try StorageLocation.makeContainer(inMemory: true)
         let context = ModelContext(container)
-        let store = JournalStore(context: context, now: { fixedNow })
+        let instant = storedNow
+        let store = JournalStore(context: context, now: { instant })
         return (store, context, container)
     }
 
@@ -197,7 +198,8 @@ final class MonthNavigationStoreTests: XCTestCase {
     ) throws -> (store: JournalStore, context: ModelContext, container: ModelContainer) {
         let container = try StorageLocation.makeContainer(inMemory: true)
         let context = ModelContext(container)
-        let store = JournalStore(context: context, now: { fixedNow }, save: { modelContext in
+        let instant = storedNow
+        let store = JournalStore(context: context, now: { instant }, save: { modelContext in
             if shouldThrow() {
                 throw ForcedSaveError.forced
             }
@@ -206,7 +208,8 @@ final class MonthNavigationStoreTests: XCTestCase {
         return (store, context, container)
     }
 
-    private var fixedNow: Date {
+    /// 履歴の時刻。テストのたびに同じ瞬間。
+    private var storedNow: Date {
         Date(timeIntervalSince1970: 1_700_000_000)
     }
 
