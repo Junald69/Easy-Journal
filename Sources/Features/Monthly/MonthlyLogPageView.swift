@@ -87,6 +87,7 @@ struct MonthlyLogPageView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(DesignTokens.Spacing.s)
             }
+            taskSection
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background {
@@ -227,6 +228,26 @@ struct MonthlyLogPageView: View {
         .accessibilityIdentifier(identifier)
     }
 
+    /// 月のタスクはログのスクロールの外、ページの下に置く。
+    ///
+    /// 1行を編集してキーボードが出ていても、記号がキーボードの上に残る。
+    /// ログを滑らせて記号を探さなくてよい。滑らせるとキーボードが閉じて、下書きが確定してしまう。
+    private var taskSection: some View {
+        MonthlyTaskSection(
+            tasks: tasks,
+            interactionsEnabled: loadFailed == false,
+            isAdding: $isAddingTask,
+            draftTitle: $taskDraftTitle,
+            editorFocus: $editorFocus,
+            logEditActive: editingDateKey != nil,
+            onBeginAdd: beginAddingTask,
+            onActivateComposer: activateTaskComposer,
+            onConfirm: confirmAddTask,
+            onCycle: cycleTask,
+            onRequestDelete: requestDeleteTask
+        )
+    }
+
     private var logList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -239,19 +260,6 @@ struct MonthlyLogPageView: View {
                     ForEach(rows, id: \.dateKey) { row in
                         logRow(row)
                     }
-                    MonthlyTaskSection(
-                        tasks: tasks,
-                        interactionsEnabled: loadFailed == false,
-                        isAdding: $isAddingTask,
-                        draftTitle: $taskDraftTitle,
-                        editorFocus: $editorFocus,
-                        logEditActive: editingDateKey != nil,
-                        onBeginAdd: beginAddingTask,
-                        onActivateComposer: activateTaskComposer,
-                        onConfirm: confirmAddTask,
-                        onCycle: cycleTask,
-                        onRequestDelete: requestDeleteTask
-                    )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -263,11 +271,6 @@ struct MonthlyLogPageView: View {
             .onChange(of: editingDateKey) { _, newKey in
                 if let newKey {
                     proxy.scrollTo(newKey, anchor: .top)
-                }
-            }
-            .onChange(of: isAddingTask) { _, adding in
-                if adding {
-                    proxy.scrollTo("monthlyTaskComposer", anchor: .center)
                 }
             }
             .onChange(of: monthKey) { _, _ in

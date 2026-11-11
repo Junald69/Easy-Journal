@@ -207,6 +207,110 @@ final class MonthlyTaskTests: XCTestCase {
         )
     }
 
+    /// 同じ月の月ページが2枚あっても、両方の月タスクを出す。追加・記号・削除のあとも崩れない。
+    func testMonthlyTasksIncludeEveryPageInTheMonth() throws {
+        guard let sharedID = UUID(uuidString: "00000000-0000-0000-0000-0000000000AA") else {
+            XCTFail("UUID を読めませんでした")
+            return
+        }
+        let (store, context, _) = try makeStore()
+        let olderTime = Date(timeIntervalSince1970: 1_000)
+        let newerTime = Date(timeIntervalSince1970: 2_000)
+        let older = insertMonthly(monthKey: "2026-10", createdAt: olderTime, in: context)
+        let newer = insertMonthly(monthKey: "2026-10", createdAt: newerTime, in: context)
+        let november = insertMonthly(
+            monthKey: "2026-11",
+            createdAt: Date(timeIntervalSince1970: 3_000),
+            in: context
+        )
+
+        let first = makeTask(title: "甲", sortOrder: 0, createdAt: olderTime)
+        let second = makeTask(title: "乙", sortOrder: 1, createdAt: newerTime)
+        let duplicateLow = makeTask(
+            id: sharedID,
+            title: "重複の先",
+            sortOrder: 2,
+            createdAt: olderTime
+        )
+        let duplicateHigh = makeTask(
+            id: sharedID,
+            title: "重複の後",
+            sortOrder: 9,
+            createdAt: newerTime
+        )
+        let daily = makeTask(
+            title: "日のタスク",
+            scopeRaw: TaskScope.daily.rawValue,
+            sortOrder: 0,
+            createdAt: olderTime
+        )
+        let otherMonth = makeTask(title: "別の月", sortOrder: 0, createdAt: newerTime)
+
+        context.insert(first)
+        context.insert(second)
+        context.insert(duplicateLow)
+        context.insert(duplicateHigh)
+        context.insert(daily)
+        context.insert(otherMonth)
+        first.monthly = older
+        duplicateLow.monthly = older
+        daily.monthly = older
+        second.monthly = newer
+        duplicateHigh.monthly = newer
+        otherMonth.monthly = november
+        try context.save()
+
+        let pagesBefore = try context.fetchCount(FetchDescriptor<MonthlyPage>())
+        let titles = try store.monthlyTasks(monthKey: "2026-10").map { task in task.title }
+        XCTAssertEqual(titles, ["甲", "乙", "重複の先"])
+        XCTAssertEqual(titles.filter { title in title == "重複の先" }.count, 1)
+        XCTAssertFalse(titles.contains("重複の後"))
+        XCTAssertFalse(titles.contains("日のタスク"))
+        XCTAssertFalse(titles.contains("別の月"))
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyPage>()), pagesBefore)
+        XCTAssertEqual(
+            try store.monthlyTasks(monthKey: "2026-11").map { task in task.title },
+            ["別の月"]
+        )
+
+        let added = try store.addMonthlyTask(monthKey: "2026-10", title: "追加")
+        XCTAssertEqual(added.monthly?.id, older.id)
+        XCTAssertEqual(added.sortOrder, 3)
+        var afterAdd = try store.monthlyTasks(monthKey: "2026-10").map { task in task.title }
+        XCTAssertEqual(afterAdd, ["甲", "乙", "重複の先", "追加"])
+
+        let partial = try store.cycleProgress(taskID: second.id)
+        XCTAssertEqual(partial, .partial)
+        XCTAssertEqual(second.progress, .partial)
+        let progressHistories = try context.fetch(FetchDescriptor<TaskHistory>()).filter { item in
+            item.taskID == second.id && item.actionRaw == TaskHistoryAction.progressChanged.rawValue
+        }
+        XCTAssertEqual(progressHistories.count, 1)
+        XCTAssertEqual(progressHistories.first?.fromProgress, .open)
+        XCTAssertEqual(progressHistories.first?.toProgress, .partial)
+
+        try store.deleteTask(taskID: first.id)
+        afterAdd = try store.monthlyTasks(monthKey: "2026-10").map { task in task.title }
+        XCTAssertEqual(afterAdd, ["乙", "重複の先", "追加"])
+        XCTAssertEqual(try store.monthlyTasks(monthKey: "2026-10").first { task in
+            task.id == second.id
+        }?.progress, .partial)
+        XCTAssertEqual(
+            try store.monthlyTasks(monthKey: "2026-11").map { task in task.title },
+            ["別の月"]
+        )
+        XCTAssertTrue(try context.fetch(FetchDescriptor<JournalTask>()).contains { task in
+            task.id == daily.id
+        })
+        XCTAssertEqual(progressHistories.first?.actionRaw, TaskHistoryAction.progressChanged.rawValue)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<MonthlyPage>()), pagesBefore)
+        let sharedShown = try store.monthlyTasks(monthKey: "2026-10").filter { task in
+            task.id == sharedID
+        }
+        XCTAssertEqual(sharedShown.count, 1)
+        XCTAssertEqual(sharedShown.first?.title, "重複の先")
+    }
+
     /// 月が無い、または月キーが不正なら、空。ページは作らない。
     func testMonthlyTasksOnMissingMonthDoesNotCreate() throws {
         let (store, context, _) = try makeStore()
@@ -277,12 +381,14 @@ final class MonthlyTaskTests: XCTestCase {
     }
 
     private func makeTask(
+        id: UUID = UUID(),
         title: String,
         scopeRaw: String = TaskScope.monthly.rawValue,
         sortOrder: Int,
         createdAt: Date
     ) -> JournalTask {
         JournalTask(
+            id: id,
             title: title,
             scopeRaw: scopeRaw,
             progressRaw: TaskProgress.open.rawValue,
@@ -293,5 +399,24 @@ final class MonthlyTaskTests: XCTestCase {
             createdAt: createdAt,
             completedAt: nil
         )
+    }
+
+    private func insertMonthly(
+        monthKey: String,
+        createdAt: Date,
+        in context: ModelContext
+    ) -> MonthlyPage {
+        let page = Page(
+            kindRaw: PageKind.monthly.rawValue,
+            dateKey: nil,
+            monthKey: monthKey,
+            createdByRaw: PageCreatedBy.system.rawValue,
+            createdAt: createdAt
+        )
+        let monthly = MonthlyPage(monthKey: monthKey)
+        context.insert(page)
+        context.insert(monthly)
+        page.monthly = monthly
+        return monthly
     }
 }
