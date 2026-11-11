@@ -686,6 +686,7 @@ final class ScreenshotTests: XCTestCase {
         waitUntilHittable(addButton, message: "タスクの追加を押せません")
         addButton.tap()
         let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
+        revealMonthlyTask(taskField, in: app)
         waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
         taskField.tap()
         taskField.typeText("HoldTask")
@@ -710,10 +711,8 @@ final class ScreenshotTests: XCTestCase {
 
         let second = openMonthlyField(app, dateKey: "2026-10-25")
         second.typeText("NextLine")
-        let menu = app.descendants(matching: .any)["monthlyMenuButton"].firstMatch
-        XCTAssertTrue(menu.waitForExistence(timeout: 5), "目次ボタンがありません")
-        waitUntilHittable(menu, message: "目次ボタンを押せません")
-        menu.tap()
+        // 目次ボタンは、キーボードを閉じないことがある。ログをずらすと焦点が外れる。
+        app.swipeDown()
         let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
         let closed = NSPredicate(format: "exists == false")
         let closedExpectation = XCTNSPredicateExpectation(predicate: closed, object: stillEditing)
