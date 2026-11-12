@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import SwiftData
 import SwiftUI
+import UIKit
 
 /// アプリの入口。
 ///
@@ -33,6 +34,8 @@ struct EasyJournalApp: App {
     private let debugJumpMonth: String?
     /// Debug かつメモリ上の保存先のときだけ、確認を通して開く URL。
     private let debugOpenURL: URL?
+    /// 画面テストのときだけ、アニメーションを止める。タップがアニメーションに遮られないようにする。
+    private let animationsDisabled: Bool
     /// 今日の日付キー。月の画面に渡す。同じ日なら書き換えない。
     @State private var todayKey: String
     /// 今どのページを開いているか。成功の画面だけに渡す。
@@ -75,6 +78,11 @@ struct EasyJournalApp: App {
             inMemoryStore: options.inMemoryStore,
             isDebugBuild: EasyJournalApp.debugBuild
         )
+        // 画面テストはメモリ上の保存先で動く。アニメーションが残ると、ボタンが押せないまま待ちが伸びる。
+        animationsDisabled = EasyJournalApp.debugBuild && options.inMemoryStore
+        if animationsDisabled {
+            UIView.setAnimationsEnabled(false)
+        }
         do {
             let container = try StorageLocation.makeContainer(inMemory: options.inMemoryStore)
             modelContainer = container
@@ -132,6 +140,11 @@ struct EasyJournalApp: App {
                 NotificationCenter.default.publisher(for: NSNotification.Name.NSSystemTimeZoneDidChange)
             ) { _ in
                 refreshTodayKey(resetTimeZone: true)
+            }
+            .transaction { transaction in
+                if animationsDisabled {
+                    transaction.disablesAnimations = true
+                }
             }
         }
     }
