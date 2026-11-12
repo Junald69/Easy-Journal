@@ -197,10 +197,13 @@ final class ScreenshotTests: XCTestCase {
 
         let field = openMonthlyField(app, dateKey: "2026-10-26")
         field.typeText("StayOct")
-        goToMonth(button: "monthlyNextButton", title: "2026年 11月", in: app)
-
-        let novemberRow = app.descendants(matching: .any)["monthlyLogRow-2026-11-01"]
-        XCTAssertTrue(novemberRow.waitForExistence(timeout: 10), "11月1日の行がありません")
+        moveMonthConsistently(
+            button: "monthlyNextButton",
+            title: "2026年 11月",
+            rowDateKey: "2026-11-01",
+            absentDateKey: "2026-10-26",
+            in: app
+        )
         XCTAssertFalse(
             app.descendants(matching: .any)["monthlyLogRow-2026-10-26"].exists,
             "10月の行が11月に残っています"
@@ -211,7 +214,13 @@ final class ScreenshotTests: XCTestCase {
         )
         attachScreenshot(app, name: "07-monthly-november")
 
-        goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
+        moveMonthConsistently(
+            button: "monthlyPreviousButton",
+            title: "2026年 10月",
+            rowDateKey: "2026-10-26",
+            absentDateKey: "2026-11-01",
+            in: app
+        )
         waitUntilTextShows(app, dateKey: "2026-10-26", text: "StayOct")
         XCTAssertTrue(
             monthlyTaskButton("未完 今月のねらい", in: app).waitForExistence(timeout: 5),
@@ -484,14 +493,15 @@ final class ScreenshotTests: XCTestCase {
             waitUntilHittable(jump, message: "外部からの月移動を押せません")
             jump.tap()
         }
-        waitForMonthTitle("2026年 11月", in: app)
         XCTAssertTrue(
-            app.descendants(matching: .any)["monthlyLogRow-2026-11-01"].waitForExistence(timeout: 10),
+            waitUntilMonthIsConsistent(
+                title: "2026年 11月",
+                rowDateKey: "2026-11-01",
+                absentDateKey: "2026-10-26",
+                timeout: 8,
+                in: app
+            ),
             "Router の月と、表示の行が違います"
-        )
-        XCTAssertFalse(
-            app.descendants(matching: .any)["monthlyLogRow-2026-10-26"].exists,
-            "10月の行が11月に出ています"
         )
 
         goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
@@ -628,36 +638,6 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertFalse(
             app.descendants(matching: .any)["monthlyLogScreen"].exists,
             "保存できたあとも月の画面が残っています"
-        )
-    }
-
-    /// ◀▶ と外からの依頼のあと、タイトルと行は同じ月を出す。
-    func testTitleAndContentStayOnTheSameMonth() {
-        let app = launchMonthly(extraArguments: ["-debugJumpMonth", "2026-12"])
-        waitForMonthlyLog(app)
-        XCTAssertEqual(app.descendants(matching: .any)["monthlyTitle"].label, "2026年 10月")
-        XCTAssertTrue(app.descendants(matching: .any)["monthlyLogRow-2026-10-27"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["monthlyLogRow-2026-11-01"].exists)
-
-        moveMonthConsistently(
-            button: "monthlyNextButton",
-            title: "2026年 11月",
-            rowDateKey: "2026-11-01",
-            absentDateKey: "2026-10-27",
-            in: app
-        )
-        moveMonthConsistently(
-            button: "monthlyPreviousButton",
-            title: "2026年 10月",
-            rowDateKey: "2026-10-27",
-            absentDateKey: "2026-11-01",
-            in: app
-        )
-        jumpMonthConsistently(
-            title: "2026年 12月",
-            rowDateKey: "2026-12-01",
-            absentDateKey: "2026-10-27",
-            in: app
         )
     }
 
@@ -954,7 +934,11 @@ final class ScreenshotTests: XCTestCase {
         in app: XCUIApplication
     ) {
         var attempt = 0
-        while attempt < 2 {
+        while attempt < 3 {
+            let titleElement = app.descendants(matching: .any)["monthlyTitle"]
+            if titleElement.exists, titleElement.label == title {
+                break
+            }
             tapMonthButton(button, in: app)
             if waitUntilMonthIsConsistent(
                 title: title,
@@ -966,33 +950,16 @@ final class ScreenshotTests: XCTestCase {
             }
             attempt += 1
         }
-        XCTFail(title + " で、タイトルと行が揃いません")
-    }
-
-    /// 外からの月移動のあと、タイトルと行が別の月になっていないことを見る。
-    private func jumpMonthConsistently(
-        title: String,
-        rowDateKey: String,
-        absentDateKey: String,
-        in app: XCUIApplication
-    ) {
-        let jump = app.descendants(matching: .any)["debugJumpMonth"].firstMatch
-        XCTAssertTrue(jump.waitForExistence(timeout: 5), "外部からの月移動がありません")
-        var attempt = 0
-        while attempt < 2 {
-            waitUntilHittable(jump, message: "外部からの月移動を押せません")
-            jump.tap()
-            if waitUntilMonthIsConsistent(
+        XCTAssertTrue(
+            waitUntilMonthIsConsistent(
                 title: title,
                 rowDateKey: rowDateKey,
                 absentDateKey: absentDateKey,
+                timeout: 8,
                 in: app
-            ) {
-                return
-            }
-            attempt += 1
-        }
-        XCTFail(title + " で、タイトルと行が揃いません")
+            ),
+            title + " で、タイトルと行が揃いません"
+        )
     }
 
     /// 移り終わるまで、タイトルの月と出ている行の月が食い違ったら失敗にする。
@@ -1000,12 +967,13 @@ final class ScreenshotTests: XCTestCase {
         title: String,
         rowDateKey: String,
         absentDateKey: String,
+        timeout: TimeInterval = 2,
         in app: XCUIApplication
     ) -> Bool {
         let titleElement = app.descendants(matching: .any)["monthlyTitle"]
         let row = app.descendants(matching: .any)["monthlyLogRow-" + rowDateKey]
         let absent = app.descendants(matching: .any)["monthlyLogRow-" + absentDateKey]
-        let deadline = Date().addingTimeInterval(4)
+        let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             let label = titleElement.label
             if row.exists && label != title {

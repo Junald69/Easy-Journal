@@ -17,7 +17,7 @@ import SwiftUI
 /// 月のタスクの追加・記号・削除は、JournalStore だけを通す。画面から直接は足さない。
 /// 翌月への繰越、タスク名の編集、並べ替え、履歴の画面は、ここでは作らない。
 struct MonthlyLogPageView: View {
-    /// Router が開いている月（`yyyy-MM`）。画面に出す月は、これだけ。
+    /// 起動時に Router が開いている月（`yyyy-MM`）。表示はそのあと `shown` が持つ。
     let monthKey: String
     /// 今日の日付キー（`yyyy-MM-dd`）。帯とスクロールに使う。
     let todayKey: String
@@ -37,6 +37,28 @@ struct MonthlyLogPageView: View {
     var resolvePageLeave: (PageRef, Int, GuardedOpenResolution) -> Bool = { _, _, _ in false }
     /// Debug かつメモリ上の保存先のときだけ、次の移動を1回失敗させる。
     var monthMoveFailure: MonthMoveFailureInjection? = nil
+
+    init(
+        monthKey: String,
+        todayKey: String,
+        openMonth: @escaping (String, Int?, MonthMoveAuthorization) -> Bool,
+        monthRequest: MonthNavigationRequest? = nil,
+        acknowledgeMonthRequest: @escaping () -> Void = {},
+        pageLeaveRequest: PageLeaveRequest? = nil,
+        resolvePageLeave: @escaping (PageRef, Int, GuardedOpenResolution) -> Bool = { _, _, _ in false },
+        monthMoveFailure: MonthMoveFailureInjection? = nil
+    ) {
+        self.monthKey = monthKey
+        self.todayKey = todayKey
+        self.openMonth = openMonth
+        self.monthRequest = monthRequest
+        self.acknowledgeMonthRequest = acknowledgeMonthRequest
+        self.pageLeaveRequest = pageLeaveRequest
+        self.resolvePageLeave = resolvePageLeave
+        self.monthMoveFailure = monthMoveFailure
+        // 最初の描画から、タイトルと行の月を揃える。空の月で入れ物を作り直さない。
+        _shown = State(initialValue: ShownMonth.empty(monthKey: monthKey))
+    }
 
     @Environment(\.modelContext) private var modelContext
     /// アプリが前面から離れたときに、編集中の行を確定する。
