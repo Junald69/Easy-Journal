@@ -101,6 +101,13 @@ struct EasyJournalApp: App {
                     // 見本は最後まで入らない。途中まで保存された分はメモリ上に残ることがある。起動は続ける。
                 }
             }
+            if options.shouldInstallManyMonthlyTasks(isDebugBuild: EasyJournalApp.debugBuild) {
+                let store = JournalStore(context: ModelContext(container))
+                // 固定の準備データ。通常の保存 API を通し、投入失敗は起動エラーにする。
+                for index in 0..<7 {
+                    _ = try store.addMonthlyTask(monthKey: "2026-10", title: "t" + String(index))
+                }
+            }
             #endif
         } catch {
             modelContainer = nil

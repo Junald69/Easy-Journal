@@ -6,6 +6,8 @@ import Foundation
 struct LaunchOptions {
     /// `-sampleData` が付いているとき true。
     let sampleData: Bool
+    /// 大量タスク UI テストの準備を明示的に要求する。投入は Debug・メモリ内限定。
+    let manyMonthlyTasksFixture: Bool
 
     /// `-openPage` の次に書かれた文字列。無ければ nil。
     let openPage: String?
@@ -29,6 +31,10 @@ struct LaunchOptions {
     /// `-debugOpenURL` の次に書かれた文字列。無ければ nil。
     /// `easyjournal://` の住所。使うかは、アプリの起動側が決める。
     let debugOpenURL: String?
+
+    func shouldInstallManyMonthlyTasks(isDebugBuild: Bool) -> Bool {
+        isDebugBuild && inMemoryStore && manyMonthlyTasksFixture
+    }
 
     /// `ProcessInfo.processInfo.arguments` から読む。
     init(arguments: [String] = ProcessInfo.processInfo.arguments) {
@@ -79,6 +85,7 @@ struct LaunchOptions {
             }
             index += 1
         }
+        self.manyMonthlyTasksFixture = arguments.contains("-uiTestManyMonthlyTasks")
         self.sampleData = sampleData
         self.openPage = openPage
         self.inMemoryStore = inMemoryStore

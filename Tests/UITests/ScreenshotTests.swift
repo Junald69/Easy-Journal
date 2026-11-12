@@ -2,6 +2,11 @@ import XCTest
 
 /// 月の左ページを撮る。機種は CI が選んだ iPhone 1台だけ。
 final class ScreenshotTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        continueAfterFailure = false
+    }
+
     /// 開いた直後（今日の 27 日）と、上までスクロールしたあと（1 日）。
     func testMonthlyLogScreenshots() {
         let app = launchMonthly()
@@ -88,64 +93,68 @@ final class ScreenshotTests: XCTestCase {
     /// アラートとボタンは firstMatch。押す前に isHittable を待つ。
     /// キーボードの右矢印は使わない。確定は「追加」ボタン。
     func testMonthlyTaskScreenshotAndDelete() {
-        let app = launchMonthly(includeSampleData: false)
-        waitForMonthlyLog(app)
+        XCTContext.runActivity(named: "testMonthlyTaskScreenshotAndDelete") { _ in
+            let app = launchMonthly(includeSampleData: false)
+            waitForMonthlyLog(app)
 
-        addMonthlyTask("Cards", in: app)
-        addMonthlyTask("Tidy", in: app)
-        cycleMonthlyTask(title: "Tidy", from: "未完", to: "一部", in: app)
-        addMonthlyTask("Insurance", in: app)
-        cycleMonthlyTask(title: "Insurance", from: "未完", to: "一部", in: app)
-        cycleMonthlyTask(title: "Insurance", from: "一部", to: "完了", in: app)
+            addMonthlyTask("Cards", in: app)
+            addMonthlyTask("Tidy", in: app)
+            cycleMonthlyTask(title: "Tidy", from: "未完", to: "一部", in: app)
+            addMonthlyTask("Insurance", in: app)
+            cycleMonthlyTask(title: "Insurance", from: "未完", to: "一部", in: app)
+            cycleMonthlyTask(title: "Insurance", from: "一部", to: "完了", in: app)
 
-        let open = monthlyTaskButton("未完 Cards", in: app)
-        let partial = monthlyTaskButton("一部 Tidy", in: app)
-        let done = monthlyTaskButton("完了 Insurance", in: app)
-        XCTAssertTrue(open.waitForExistence(timeout: 5), "未完 Cards がありません")
-        XCTAssertTrue(partial.waitForExistence(timeout: 5), "一部 Tidy がありません")
-        XCTAssertTrue(done.waitForExistence(timeout: 5), "完了 Insurance がありません")
-        revealMonthlyTask(done, in: app)
-        waitUntilHittable(done, message: "完了 Insurance を押せません")
-        attachScreenshot(app, name: "06-monthly-task")
+            let open = monthlyTaskButton("未完 Cards", in: app)
+            let partial = monthlyTaskButton("一部 Tidy", in: app)
+            let done = monthlyTaskButton("完了 Insurance", in: app)
+            XCTAssertTrue(open.waitForExistence(timeout: 5), "未完 Cards がありません")
+            XCTAssertTrue(partial.waitForExistence(timeout: 5), "一部 Tidy がありません")
+            XCTAssertTrue(done.waitForExistence(timeout: 5), "完了 Insurance がありません")
+            revealMonthlyTask(done, in: app)
+            attachScreenshot(app, name: "06-monthly-task")
 
-        longPressMonthlyTask("Insurance", in: app)
-        tapMonthlyTaskDeleteMenu(in: app)
-        tapMonthlyTaskAlertButton("キャンセル", in: app)
-        XCTAssertTrue(done.waitForExistence(timeout: 5), "キャンセル後にタスクが消えました")
-        XCTAssertTrue(open.exists, "キャンセル後に Cards がありません")
-        XCTAssertTrue(partial.exists, "キャンセル後に Tidy がありません")
+            longPressMonthlyTask("Insurance", in: app)
+            tapMonthlyTaskDeleteMenu(in: app)
+            tapMonthlyTaskAlertButton("キャンセル", in: app)
+            XCTAssertTrue(done.waitForExistence(timeout: 5), "キャンセル後にタスクが消えました")
+            XCTAssertTrue(open.exists, "キャンセル後に Cards がありません")
+            XCTAssertTrue(partial.exists, "キャンセル後に Tidy がありません")
 
-        longPressMonthlyTask("Insurance", in: app)
-        tapMonthlyTaskDeleteMenu(in: app)
-        tapMonthlyTaskAlertButton("消す", in: app)
-        waitUntilGone(done, message: "消したタスクが残っています")
-        XCTAssertTrue(open.waitForExistence(timeout: 5), "消したあとに Cards がありません")
-        XCTAssertTrue(partial.waitForExistence(timeout: 5), "消したあとに Tidy がありません")
+            longPressMonthlyTask("Insurance", in: app)
+            tapMonthlyTaskDeleteMenu(in: app)
+            tapMonthlyTaskAlertButton("消す", in: app)
+            waitUntilGone(done, message: "消したタスクが残っています")
+            XCTAssertTrue(open.waitForExistence(timeout: 5), "消したあとに Cards がありません")
+            XCTAssertTrue(partial.waitForExistence(timeout: 5), "消したあとに Tidy がありません")
+        }
     }
 
     /// タスクが多くても、最後の記号はタスク欄の中を滑らせれば押せる。ログは押し出さない。
     func testManyMonthlyTasksLastSymbolStaysReachable() {
-        let app = launchMonthly(includeSampleData: false)
-        waitForMonthlyLog(app)
-        let lastIndex = 7
-        var index = 0
-        while index <= lastIndex {
-            addMonthlyTask("t" + String(index), in: app)
-            index += 1
+        XCTContext.runActivity(named: "testManyMonthlyTasksLastSymbolStaysReachable") { _ in
+            let app = launchMonthly(extraArguments: ["-uiTestManyMonthlyTasks"], includeSampleData: false)
+            waitForMonthlyLog(app)
+            let lastIndex = 7
+            addMonthlyTask("t7", in: app)
+            let list = app.scrollViews["monthlyTaskList"].firstMatch
+            let labels = list.staticTexts.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "monthlyTaskLabel-")
+            )
+            XCTAssertEqual(labels.allElementsBoundByIndex.map { $0.label }, (0...7).map { "t" + String($0) })
+
+            let last = revealLastMonthlyTask("未完 t" + String(lastIndex), in: app)
+            waitUntilHittable(last, message: "最後のタスクを押せません")
+            last.tap()
+            let advanced = monthlyTaskButton("一部 t" + String(lastIndex), in: app)
+            XCTAssertTrue(advanced.waitForExistence(timeout: 5), "最後のタスクの状態が変わりません")
+
+            let logScroll = app.scrollViews.containing(
+                .any,
+                identifier: "monthlyLogRow-2026-10-27"
+            ).firstMatch
+            XCTAssertTrue(logScroll.waitForExistence(timeout: 5), "ログのスクロールがありません")
+            XCTAssertGreaterThan(logScroll.frame.height, 80, "ログの行を滑らせる余地がありません")
         }
-
-        let last = revealLastMonthlyTask("未完 t" + String(lastIndex), in: app)
-        waitUntilHittable(last, message: "最後のタスクを押せません")
-        last.tap()
-        let advanced = monthlyTaskButton("一部 t" + String(lastIndex), in: app)
-        XCTAssertTrue(advanced.waitForExistence(timeout: 5), "最後のタスクの状態が変わりません")
-
-        let logScroll = app.scrollViews.containing(
-            .any,
-            identifier: "monthlyLogRow-2026-10-27"
-        ).firstMatch
-        XCTAssertTrue(logScroll.waitForExistence(timeout: 5), "ログのスクロールがありません")
-        XCTAssertGreaterThan(logScroll.frame.height, 80, "ログの行を滑らせる余地がありません")
     }
 
     /// 文章がある行を空にしたあと、タスクの記号を押す。
@@ -296,9 +305,8 @@ final class ScreenshotTests: XCTestCase {
         waitUntilTextShows(app, dateKey: dateKey, text: "資料")
         waitForMonthTitle("2026年 10月", in: app)
 
-        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        let addButton = app.buttons["monthlyTaskAddButton"].firstMatch
         revealMonthlyTask(addButton, in: app)
-        waitUntilHittable(addButton, message: "タスクの追加を押せません")
         addButton.tap()
         let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
         waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
@@ -306,8 +314,7 @@ final class ScreenshotTests: XCTestCase {
         taskField.typeText("KeepMe")
         // キーボードが開いていると、最初のタップはキーボードを閉じるだけで、月の移動は走らない。
         // 閉じたあとのタップで、未確定のタスク名が残って月が動かないことを見る。
-        tapMonthButton("monthlyNextButton", in: app)
-        tapMonthButton("monthlyNextButton", in: app)
+        requestBlockedMonthMove(in: app)
         waitForMonthTitle("2026年 10月", in: app)
         let shown = taskField.value as? String ?? ""
         XCTAssertTrue(shown.contains("KeepMe"), "未確定のタスク名が消えました: " + shown)
@@ -316,9 +323,8 @@ final class ScreenshotTests: XCTestCase {
             "未確定のタスク名があるのに月が移りました"
         )
 
-        let confirm = app.descendants(matching: .any)["monthlyTaskConfirmButton"].firstMatch
+        let confirm = app.buttons["monthlyTaskConfirmButton"].firstMatch
         revealMonthlyTask(confirm, in: app)
-        waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
         confirm.tap()
         let created = monthlyTaskButton("未完 KeepMe", in: app)
         XCTAssertTrue(created.waitForExistence(timeout: 5), "追加後のタスクがありません")
@@ -381,9 +387,8 @@ final class ScreenshotTests: XCTestCase {
         let app = launchMonthly(includeSampleData: false)
         waitForMonthlyLog(app)
 
-        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        let addButton = app.buttons["monthlyTaskAddButton"].firstMatch
         revealMonthlyTask(addButton, in: app)
-        waitUntilHittable(addButton, message: "タスクの追加を押せません")
         addButton.tap()
         let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
         waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
@@ -392,8 +397,7 @@ final class ScreenshotTests: XCTestCase {
 
         let field = openMonthlyField(app, dateKey: dateKey)
         field.typeText("KeepLog")
-        tapMonthButton("monthlyNextButton", in: app)
-        tapMonthButton("monthlyNextButton", in: app)
+        requestBlockedMonthMove(in: app)
 
         waitForMonthTitle("2026年 10月", in: app)
         let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
@@ -548,9 +552,8 @@ final class ScreenshotTests: XCTestCase {
         )
         waitForMonthlyLog(app)
 
-        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        let addButton = app.buttons["monthlyTaskAddButton"].firstMatch
         revealMonthlyTask(addButton, in: app)
-        waitUntilHittable(addButton, message: "タスクの追加を押せません")
         addButton.tap()
         let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
         waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
@@ -669,9 +672,8 @@ final class ScreenshotTests: XCTestCase {
         waitForMonthlyLog(app)
 
         // ＋ を先に押す。日記を開いたまま ＋ を押すと、その日記は保存されて閉じる。
-        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
+        let addButton = app.buttons["monthlyTaskAddButton"].firstMatch
         revealMonthlyTask(addButton, in: app)
-        waitUntilHittable(addButton, message: "タスクの追加を押せません")
         addButton.tap()
         let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
         waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
@@ -680,8 +682,7 @@ final class ScreenshotTests: XCTestCase {
 
         let field = openMonthlyField(app, dateKey: dateKey)
         field.typeText("FocusLog")
-        tapMonthButton("monthlyNextButton", in: app)
-        tapMonthButton("monthlyNextButton", in: app)
+        requestBlockedMonthMove(in: app)
         let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
         XCTAssertTrue(field.waitForExistence(timeout: 5), "止めた時点で一言日記の編集欄が閉じました")
@@ -714,53 +715,53 @@ final class ScreenshotTests: XCTestCase {
 
     /// タスク欄で止めたあとタスクを追加したら、次の日記は焦点が外れたときに保存して閉じる。
     func testAfterTaskBlockAddingTaskRestoresFocusLossSave() {
-        let app = launchMonthly(includeSampleData: false)
-        waitForMonthlyLog(app)
+        XCTContext.runActivity(named: "testAfterTaskBlockAddingTaskRestoresFocusLossSave") { _ in
+            let app = launchMonthly(includeSampleData: false)
+            waitForMonthlyLog(app)
 
-        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
-        revealMonthlyTask(addButton, in: app)
-        waitUntilHittable(addButton, message: "タスクの追加を押せません")
-        addButton.tap()
-        let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
-        revealMonthlyTask(taskField, in: app)
-        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
-        taskField.tap()
-        taskField.typeText("HoldTask")
+            let addButton = app.buttons["monthlyTaskAddButton"].firstMatch
+            revealMonthlyTask(addButton, in: app)
+            addButton.tap()
+            let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
+            revealMonthlyTask(taskField, in: app)
+            taskField.tap()
+            taskField.typeText("HoldTask")
 
-        let first = openMonthlyField(app, dateKey: "2026-10-26")
-        first.typeText("StayOpen")
-        tapMonthButton("monthlyNextButton", in: app)
-        tapMonthButton("monthlyNextButton", in: app)
-        let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
-        XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
+            let first = openMonthlyField(app, dateKey: "2026-10-26")
+            first.typeText("StayOpen")
+            requestBlockedMonthMove(in: app)
+            let message = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
+            XCTAssertTrue(message.waitForExistence(timeout: 5), "止めた理由が出ません")
 
-        let confirm = app.descendants(matching: .any)["monthlyTaskConfirmButton"].firstMatch
-        revealMonthlyTask(confirm, in: app)
-        waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
-        confirm.tap()
-        XCTAssertTrue(
-            monthlyTaskButton("未完 HoldTask", in: app).waitForExistence(timeout: 5),
-            "止めたあとのタスクが追加されません"
-        )
-        let closedFirst = app.descendants(matching: .textField)["monthlyLogText-2026-10-26"]
-        XCTAssertFalse(closedFirst.exists, "タスクを追加したあとも、最初の日記が編集のままです")
+            let confirm = app.buttons["monthlyTaskConfirmButton"].firstMatch
+            revealMonthlyTask(confirm, in: app)
+            confirm.tap()
+            XCTAssertTrue(
+                monthlyTaskButton("未完 HoldTask", in: app).waitForExistence(timeout: 5),
+                "止めたあとのタスクが追加されません"
+            )
+            waitUntilGone(app.textFields["monthlyTaskTitleField"].firstMatch, message: "追加後も入力欄が残っています")
+            waitUntilTextShows(app, dateKey: "2026-10-26", text: "StayOpen")
+            let closedFirst = app.descendants(matching: .textField)["monthlyLogText-2026-10-26"]
+            XCTAssertFalse(closedFirst.exists, "タスクを追加したあとも、最初の日記が編集のままです")
 
-        let second = openMonthlyField(app, dateKey: "2026-10-25")
-        second.typeText("NextLine")
-        // 別の行を押すと、前の行を保存してからその行を開く。
-        // キーボードを閉じるだけの操作は、この画面には確定的な入口が無い。
-        tapMonthlyText(app, dateKey: "2026-10-24")
-        waitForMonthTitle("2026年 10月", in: app)
-        let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
-        let closed = NSPredicate(format: "exists == false")
-        let closedExpectation = XCTNSPredicateExpectation(predicate: closed, object: stillEditing)
-        XCTAssertEqual(
-            XCTWaiter().wait(for: [closedExpectation], timeout: 5),
-            .completed,
-            "別の行へ移したあとも、前の編集欄が閉じていません"
-        )
-        waitUntilTextShows(app, dateKey: "2026-10-25", text: "NextLine")
-        waitForMonthTitle("2026年 10月", in: app)
+            let second = openMonthlyField(app, dateKey: "2026-10-25")
+            second.typeText("NextLine")
+            // 別の行を押すと、前の行を保存してからその行を開く。
+            // キーボードを閉じるだけの操作は、この画面には確定的な入口が無い。
+            tapMonthlyText(app, dateKey: "2026-10-24")
+            waitForMonthTitle("2026年 10月", in: app)
+            let stillEditing = app.descendants(matching: .textField)["monthlyLogText-2026-10-25"]
+            let closed = NSPredicate(format: "exists == false")
+            let closedExpectation = XCTNSPredicateExpectation(predicate: closed, object: stillEditing)
+            XCTAssertEqual(
+                XCTWaiter().wait(for: [closedExpectation], timeout: 5),
+                .completed,
+                "別の行へ移したあとも、前の編集欄が閉じていません"
+            )
+            waitUntilTextShows(app, dateKey: "2026-10-25", text: "NextLine")
+            waitForMonthTitle("2026年 10月", in: app)
+        }
     }
 
     /// 12月から翌年1月、1月から前年12月へ、外からの依頼でも表示と行がその月になる。
@@ -982,8 +983,25 @@ final class ScreenshotTests: XCTestCase {
         return alert
     }
 
+    private func requestBlockedMonthMove(in app: XCUIApplication) {
+        XCTContext.runActivity(named: "タスク下書きによる月移動の阻止") { _ in
+            let title = app.descendants(matching: .any)["monthlyTitle"].firstMatch
+            let original = title.label
+            let marker = app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].firstMatch
+            tapMonthButton("monthlyNextButton", in: app)
+            let resolved = NSPredicate { _, _ in marker.exists || title.label != original }
+            let result = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: resolved, object: app)], timeout: 2)
+            XCTAssertEqual(title.label, original, "未確定のタスクがあるのに月が移りました")
+            if result != .completed {
+                tapMonthButton("monthlyNextButton", in: app)
+            }
+            XCTAssertTrue(marker.waitForExistence(timeout: 5), "止めた理由が出ません")
+            XCTAssertEqual(title.label, original)
+        }
+    }
+
     private func tapMonthButton(_ identifier: String, in app: XCUIApplication) {
-        let button = app.descendants(matching: .any)[identifier].firstMatch
+        let button = app.buttons[identifier].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 5), identifier + " がありません")
         waitUntilHittable(button, message: identifier + " を押せません")
         button.tap()
@@ -1029,18 +1047,20 @@ final class ScreenshotTests: XCTestCase {
 
     /// 文章の部分を押す。隠れていたら、見えるまで少しずらす。固定の待ちは使わない。
     private func tapMonthlyText(_ app: XCUIApplication, dateKey: String) {
-        let element = app.descendants(matching: .any)["monthlyLogText-" + dateKey]
-        XCTAssertTrue(
-            element.waitForExistence(timeout: 10),
-            dateKey + " の文章がありません"
-        )
-        var attempt = 0
-        while element.isHittable == false && attempt < 3 {
-            app.swipeDown()
-            attempt += 1
+        XCTContext.runActivity(named: "日記行へ移動") { _ in
+            let element = app.descendants(matching: .any)["monthlyLogText-" + dateKey]
+            XCTAssertTrue(
+                element.waitForExistence(timeout: 10),
+                dateKey + " の文章がありません"
+            )
+            var attempt = 0
+            while element.isHittable == false && attempt < 3 {
+                app.swipeDown()
+                attempt += 1
+            }
+            XCTAssertTrue(element.isHittable, dateKey + " の文章を押せません")
+            element.tap()
         }
-        XCTAssertTrue(element.isHittable, dateKey + " の文章を押せません")
-        element.tap()
     }
 
     /// 読み上げの文か、欄の値に、入力した文字が出るまで待つ。
@@ -1266,36 +1286,31 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func addMonthlyTask(_ title: String, in app: XCUIApplication) {
-        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
-        revealMonthlyTask(addButton, in: app)
-        waitUntilHittable(addButton, message: "タスクの追加を押せません")
-        addButton.tap()
-        let field = app.textFields["monthlyTaskTitleField"].firstMatch
-        waitUntilHittable(field, message: "タスクの名前欄を押せません")
-        field.tap()
-        field.typeText(title)
-        let confirm = app.descendants(matching: .any)["monthlyTaskConfirmButton"].firstMatch
-        revealMonthlyTask(confirm, in: app)
-        if confirm.isHittable {
-            waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
+        XCTContext.runActivity(named: "タスク追加: " + title) { _ in
+            let addButton = app.buttons["monthlyTaskAddButton"].firstMatch
+            waitUntilHittable(addButton, message: "タスクの追加を押せません")
+            addButton.tap()
+            let field = app.textFields["monthlyTaskTitleField"].firstMatch
+            revealMonthlyTask(field, in: app)
+            field.tap()
+            field.typeText(title)
+            let confirm = app.buttons["monthlyTaskConfirmButton"].firstMatch
+            revealMonthlyTask(confirm, in: app)
             confirm.tap()
-        } else if field.isHittable {
-            field.typeText("\n")
-        } else {
-            waitUntilHittable(confirm, message: "タスクの追加の確定を押せません")
-            confirm.tap()
+            let created = monthlyTaskButton("未完 " + title, in: app)
+            XCTAssertTrue(created.waitForExistence(timeout: 5), "追加後の未完が見つかりません: " + title)
+            waitUntilGone(field, message: "追加後も入力欄が残っています")
         }
-        let created = monthlyTaskButton("未完 " + title, in: app)
-        XCTAssertTrue(created.waitForExistence(timeout: 5), "追加後の未完が見つかりません: " + title)
     }
 
     private func cycleMonthlyTask(title: String, from: String, to: String, in app: XCUIApplication) {
-        let current = monthlyTaskButton(from + " " + title, in: app)
-        revealMonthlyTask(current, in: app)
-        waitUntilHittable(current, message: from + " " + title + " を押せません")
-        current.tap()
-        let updated = monthlyTaskButton(to + " " + title, in: app)
-        XCTAssertTrue(updated.waitForExistence(timeout: 5), to + " " + title)
+        XCTContext.runActivity(named: "タスク状態変更") { _ in
+            let current = monthlyTaskButton(from + " " + title, in: app)
+            revealMonthlyTask(current, in: app)
+            current.tap()
+            let updated = monthlyTaskButton(to + " " + title, in: app)
+            XCTAssertTrue(updated.waitForExistence(timeout: 5), to + " " + title)
+        }
     }
 
     private func monthlyTaskButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
@@ -1303,39 +1318,45 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func longPressMonthlyTask(_ title: String, in app: XCUIApplication) {
-        let identified = app.descendants(matching: .any)["monthlyTaskLabel-" + title].firstMatch
-        let target: XCUIElement
-        if identified.waitForExistence(timeout: 2) {
-            target = identified
-        } else {
-            target = app.staticTexts[title].firstMatch
+        XCTContext.runActivity(named: "タスク長押し") { _ in
+            let identified = app.descendants(matching: .any)["monthlyTaskLabel-" + title].firstMatch
+            let target: XCUIElement
+            if identified.waitForExistence(timeout: 2) {
+                target = identified
+            } else {
+                target = app.staticTexts[title].firstMatch
+            }
+            revealMonthlyTask(target, in: app)
+            target.press(forDuration: 1.2)
         }
-        revealMonthlyTask(target, in: app)
-        waitUntilHittable(target, message: title + " を長押しできません")
-        target.press(forDuration: 1.2)
     }
 
     private func tapMonthlyTaskDeleteMenu(in app: XCUIApplication) {
-        let identified = app.descendants(matching: .any)["monthlyTaskDeleteAction"].firstMatch
-        if identified.waitForExistence(timeout: 3) {
-            waitUntilHittable(identified, message: "削除を押せません")
-            identified.tap()
-            return
+        XCTContext.runActivity(named: "削除メニュー") { _ in
+            let identified = app.buttons["monthlyTaskDeleteAction"].firstMatch
+            if identified.waitForExistence(timeout: 3) {
+                waitUntilHittable(identified, message: "削除を押せません")
+                identified.tap()
+                return
+            }
+            let labeled = app.descendants(matching: .any).matching(
+                NSPredicate(format: "label == %@", "削除")
+            ).firstMatch
+            XCTAssertTrue(labeled.waitForExistence(timeout: 3), "削除のメニューがありません")
+            waitUntilHittable(labeled, message: "削除を押せません")
+            labeled.tap()
         }
-        let labeled = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@", "削除")
-        ).firstMatch
-        XCTAssertTrue(labeled.waitForExistence(timeout: 3), "削除のメニューがありません")
-        waitUntilHittable(labeled, message: "削除を押せません")
-        labeled.tap()
     }
 
     private func tapMonthlyTaskAlertButton(_ title: String, in app: XCUIApplication) {
-        let alert = app.alerts["タスクを消しますか"].firstMatch
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "タスクの確認が出ません")
-        let button = alert.buttons[title].firstMatch
-        waitUntilHittable(button, message: title + " を押せません")
-        button.tap()
+        XCTContext.runActivity(named: "タスク削除確認") { _ in
+            let alert = app.alerts["タスクを消しますか"].firstMatch
+            XCTAssertTrue(alert.waitForExistence(timeout: 5), "タスクの確認が出ません")
+            let button = alert.buttons[title].firstMatch
+            waitUntilHittable(button, message: title + " を押せません")
+            button.tap()
+            waitUntilGone(alert, message: "タスクの確認が閉じません")
+        }
     }
 
     /// 最後のタスクが画面の外なら、タスク欄の中だけを滑らせて出す。ログは滑らせない。
@@ -1404,23 +1425,24 @@ final class ScreenshotTests: XCTestCase {
         return true
     }
 
-    /// 画面の外なら、上へ滑らせて見えるようにする。見えているときは滑らせない。
-    private func revealMonthlyTask(_ element: XCUIElement, in app: XCUIApplication, attempts: Int = 8) {
-        XCTAssertTrue(element.waitForExistence(timeout: 5), "要素がありません")
-        var attempt = 0
-        while element.isHittable == false && attempt < attempts {
-            let ready = NSPredicate(block: { evaluated, _ in
-                guard let candidate = evaluated as? XCUIElement else {
-                    return false
-                }
-                return candidate.isHittable
-            })
-            let expectation = XCTNSPredicateExpectation(predicate: ready, object: element)
-            if XCTWaiter().wait(for: [expectation], timeout: 1) == .completed {
+    /// 入力欄は一覧の先頭へ、タスクは末尾へ。一覧の外は滑らせない。
+    private func revealMonthlyTask(_ element: XCUIElement, in app: XCUIApplication, attempts: Int = 4) {
+        XCTContext.runActivity(named: "タスク欄内で表示: " + element.identifier) { _ in
+            XCTAssertTrue(element.waitForExistence(timeout: 5), "要素がありません")
+            if element.isHittable { return }
+            if element.identifier == "monthlyTaskAddButton" {
+                waitUntilHittable(element, message: "タスク追加ボタンを押せません")
                 return
             }
-            app.swipeUp()
-            attempt += 1
+            let list = app.scrollViews["monthlyTaskList"].firstMatch
+            XCTAssertTrue(list.waitForExistence(timeout: 5), "タスクの一覧がありません")
+            let composer = element.identifier == "monthlyTaskTitleField"
+                || element.identifier == "monthlyTaskConfirmButton"
+            for _ in 0..<attempts {
+                if composer { list.swipeDown() } else { list.swipeUp() }
+                if element.isHittable { return }
+            }
+            waitUntilHittable(element, message: "タスク欄の要素を押せません")
         }
     }
 
