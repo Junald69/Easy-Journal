@@ -463,7 +463,11 @@ struct MonthlyLogPageView: View {
             }
             .onChange(of: editingDateKey) { _, newKey in
                 if let newKey {
-                    proxy.scrollTo(newKey, anchor: .top)
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        proxy.scrollTo(newKey, anchor: .top)
+                    }
                 }
             }
             .onChange(of: displayedMonthKey) { _, _ in

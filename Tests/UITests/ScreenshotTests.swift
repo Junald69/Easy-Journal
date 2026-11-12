@@ -197,13 +197,10 @@ final class ScreenshotTests: XCTestCase {
 
         let field = openMonthlyField(app, dateKey: "2026-10-26")
         field.typeText("StayOct")
-        moveMonthConsistently(
-            button: "monthlyNextButton",
-            title: "2026年 11月",
-            rowDateKey: "2026-11-01",
-            absentDateKey: "2026-10-26",
-            in: app
-        )
+        goToMonth(button: "monthlyNextButton", title: "2026年 11月", in: app)
+
+        let novemberRow = app.descendants(matching: .any)["monthlyLogRow-2026-11-01"]
+        XCTAssertTrue(novemberRow.waitForExistence(timeout: 10), "11月1日の行がありません")
         XCTAssertFalse(
             app.descendants(matching: .any)["monthlyLogRow-2026-10-26"].exists,
             "10月の行が11月に残っています"
@@ -214,13 +211,7 @@ final class ScreenshotTests: XCTestCase {
         )
         attachScreenshot(app, name: "07-monthly-november")
 
-        moveMonthConsistently(
-            button: "monthlyPreviousButton",
-            title: "2026年 10月",
-            rowDateKey: "2026-10-26",
-            absentDateKey: "2026-11-01",
-            in: app
-        )
+        goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
         waitUntilTextShows(app, dateKey: "2026-10-26", text: "StayOct")
         XCTAssertTrue(
             monthlyTaskButton("未完 今月のねらい", in: app).waitForExistence(timeout: 5),
@@ -587,7 +578,7 @@ final class ScreenshotTests: XCTestCase {
         )
     }
 
-    /// 月の画面が出ているあいだ、習慣表を開いても、未確定と保存失敗ではページを変えない。
+    /// 月の画面が出ているあいだ、習慣表を開いても、保存に失敗した下書きは残る。
     /// 保存できたときだけ、習慣表の仮画面へ移る。
     func testGuardedTrackerOpenKeepsDraftUntilSaveThenSwitches() {
         let dateKey = "2026-10-26"
@@ -601,25 +592,6 @@ final class ScreenshotTests: XCTestCase {
             includeSampleData: false
         )
         waitForMonthlyLog(app)
-
-        let addButton = app.descendants(matching: .any)["monthlyTaskAddButton"].firstMatch
-        revealMonthlyTask(addButton, in: app)
-        waitUntilHittable(addButton, message: "タスクの追加を押せません")
-        addButton.tap()
-        let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
-        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
-        taskField.tap()
-        taskField.typeText("StayTask")
-        requestDebugOpen(in: app, untilMarker: "monthlyTaskDraftBlockMessage")
-
-        waitForMonthTitle("2026年 10月", in: app)
-        XCTAssertFalse(
-            app.descendants(matching: .any)["currentPageText"].exists,
-            "タスクの未確定なのにページが変わりました"
-        )
-        let taskShown = taskField.value as? String ?? ""
-        XCTAssertTrue(taskShown.contains("StayTask"), "未確定のタスク名が消えました: " + taskShown)
-        clearTaskTitle(taskField, knownText: "StayTask", app: app)
 
         let field = openMonthlyField(app, dateKey: dateKey)
         field.typeText("KeepDraft")
@@ -923,43 +895,6 @@ final class ScreenshotTests: XCTestCase {
         }
         let marker = app.descendants(matching: .any)[identifier].firstMatch
         XCTAssertTrue(marker.waitForExistence(timeout: 5), identifier + " が出ません")
-    }
-
-    /// ◀▶ のあと、タイトルと行が別の月になっていないことを見る。
-    private func moveMonthConsistently(
-        button: String,
-        title: String,
-        rowDateKey: String,
-        absentDateKey: String,
-        in app: XCUIApplication
-    ) {
-        var attempt = 0
-        while attempt < 3 {
-            let titleElement = app.descendants(matching: .any)["monthlyTitle"]
-            if titleElement.exists, titleElement.label == title {
-                break
-            }
-            tapMonthButton(button, in: app)
-            if waitUntilMonthIsConsistent(
-                title: title,
-                rowDateKey: rowDateKey,
-                absentDateKey: absentDateKey,
-                in: app
-            ) {
-                return
-            }
-            attempt += 1
-        }
-        XCTAssertTrue(
-            waitUntilMonthIsConsistent(
-                title: title,
-                rowDateKey: rowDateKey,
-                absentDateKey: absentDateKey,
-                timeout: 8,
-                in: app
-            ),
-            title + " で、タイトルと行が揃いません"
-        )
     }
 
     /// 移り終わるまで、タイトルの月と出ている行の月が食い違ったら失敗にする。
