@@ -13,7 +13,7 @@ import UIKit
 ///
 /// `-inMemoryStore` が付いているときだけ、メモリ上の保存先を使う。
 /// Debug のとき、見本を入れてよいかは `SampleData.shouldInstall` が決める。
-/// 条件を満たすときだけ見本を入れる。入れ損ねても、クラッシュさせず、そのまま起動する。
+/// 条件を満たすときだけ見本を入れる。投入に失敗したら、クラッシュさせず、起動エラーを表示する。
 /// `-openPage` の文字列が読めたときは、そのページを最初のページにする。
 /// 無いか、読めないときは、いまの月の記録（Monthly Log）のまま。
 /// 開いている月は、起動のときに決める。日付が変わっても月は動かさない。
@@ -85,8 +85,6 @@ struct EasyJournalApp: App {
         }
         do {
             let container = try StorageLocation.makeContainer(inMemory: options.inMemoryStore)
-            modelContainer = container
-            storageErrorMessage = nil
             // Release（配布向けの組み立て）では、この塊ごと無い。見本は入らない。
             #if DEBUG
             if SampleData.shouldInstall(
@@ -95,11 +93,7 @@ struct EasyJournalApp: App {
             ) {
                 let context = ModelContext(container)
                 let store = JournalStore(context: context)
-                do {
-                    try SampleData.install(into: store, context: context)
-                } catch {
-                    // 見本は最後まで入らない。途中まで保存された分はメモリ上に残ることがある。起動は続ける。
-                }
+                try SampleData.install(into: store, context: context)
             }
             if options.shouldInstallManyMonthlyTasks(isDebugBuild: EasyJournalApp.debugBuild) {
                 let store = JournalStore(context: ModelContext(container))
@@ -109,6 +103,8 @@ struct EasyJournalApp: App {
                 }
             }
             #endif
+            modelContainer = container
+            storageErrorMessage = nil
         } catch {
             modelContainer = nil
             storageErrorMessage = error.localizedDescription
