@@ -202,6 +202,9 @@ final class RouterTests: XCTestCase {
     }
 
     /// 月の画面が出ているあいだ、別の月への open は依頼になる。表示月は変えない。
+    ///
+    /// 日のページと習慣表も、安全確認が通るまでページを変えない。
+    /// 止めたときと失敗したときは、ページを残す。通ったときだけ変える。
     func testGuardedOpenAsksInsteadOfChangingTheMonth() throws {
         let router = try octoberRouter()
         router.beginGuardingMonthlyNavigation()
@@ -209,10 +212,76 @@ final class RouterTests: XCTestCase {
         router.open(.monthlyLog(monthKey: "2026-11"))
         XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
         XCTAssertEqual(router.monthRequest?.monthKey, "2026-11")
+        XCTAssertNil(router.pageLeaveRequest)
 
         router.open(.daily(dateKey: "2026-10-27"))
-        XCTAssertEqual(router.current, .daily(dateKey: "2026-10-27"))
+        XCTAssertEqual(
+            router.current,
+            .monthlyLog(monthKey: "2026-10"),
+            "安全確認の前に、日のページへ変わった"
+        )
         XCTAssertNil(router.monthRequest)
+        let dailyLeave = try XCTUnwrap(router.pageLeaveRequest)
+        XCTAssertEqual(dailyLeave.destination, .daily(dateKey: "2026-10-27"))
+
+        XCTAssertFalse(router.resolveGuardedOpen(
+            dailyLeave.destination,
+            requestToken: dailyLeave.token,
+            resolution: .blocked
+        ))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertNil(router.pageLeaveRequest)
+
+        router.open(.monthlyTracker(monthKey: "2026-10"))
+        let trackerLeave = try XCTUnwrap(router.pageLeaveRequest)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertFalse(router.resolveGuardedOpen(
+            trackerLeave.destination,
+            requestToken: trackerLeave.token,
+            resolution: .failed
+        ))
+        XCTAssertEqual(
+            router.current,
+            .monthlyLog(monthKey: "2026-10"),
+            "失敗したのにページが変わった"
+        )
+        XCTAssertNil(router.pageLeaveRequest)
+
+        router.open(.daily(dateKey: "2026-10-27"))
+        let passLeave = try XCTUnwrap(router.pageLeaveRequest)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        let wrongDestination = PageLeaveAuthorization.makeForTests(
+            destination: .monthlyTracker(monthKey: "2026-10"),
+            requestToken: passLeave.token
+        )
+        XCTAssertFalse(router.resolveGuardedOpen(
+            passLeave.destination,
+            requestToken: passLeave.token,
+            resolution: .passed(wrongDestination)
+        ))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertNotNil(router.pageLeaveRequest)
+
+        let passed = PageLeaveAuthorization.makeForTests(
+            destination: passLeave.destination,
+            requestToken: passLeave.token
+        )
+        XCTAssertTrue(router.resolveGuardedOpen(
+            passLeave.destination,
+            requestToken: passLeave.token,
+            resolution: .passed(passed)
+        ))
+        XCTAssertEqual(router.current, .daily(dateKey: "2026-10-27"))
+        XCTAssertFalse(router.resolveGuardedOpen(
+            passLeave.destination,
+            requestToken: passLeave.token,
+            resolution: .passed(passed)
+        ))
+        XCTAssertEqual(
+            router.current,
+            .daily(dateKey: "2026-10-27"),
+            "同じ承諾の再使用でページが変わった"
+        )
 
         router.open(.monthlyLog(monthKey: "2026-10"))
         router.beginGuardingMonthlyNavigation()
@@ -226,12 +295,47 @@ final class RouterTests: XCTestCase {
 
         router.endGuardingMonthlyNavigation()
         XCTAssertNil(router.monthRequest)
+        XCTAssertNil(router.pageLeaveRequest)
         router.open(.monthlyLog(monthKey: "2027-01"))
         XCTAssertEqual(router.current, .monthlyLog(monthKey: "2027-01"))
         XCTAssertNil(router.monthRequest)
     }
 
-    /// 月の画面が出ているあいだ、月の URL も依頼になる。日の URL は、今までどおり開く。
+    /// 承諾は移る先の月に結び付き、1回だけ使える。画面が出ていないときは変えない。
+    func testMonthMoveAuthorizationIsOneTimeAndBoundToTheMonth() throws {
+        let router = try octoberRouter()
+        let outside = MonthMoveAuthorization.makeForTests(monthKey: "2026-11", requestToken: nil)
+        XCTAssertTrue(outside.isAccepted)
+        XCTAssertFalse(router.commitDisplayedMonth("2026-11", authorization: outside))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+
+        router.beginGuardingMonthlyNavigation()
+        XCTAssertFalse(router.commitDisplayedMonth("2026-13", authorization: outside))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+
+        XCTAssertFalse(router.commitDisplayedMonth("2026-12", authorization: outside))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        XCTAssertTrue(router.commitDisplayedMonth("2026-11", authorization: outside))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-11"))
+
+        XCTAssertFalse(router.commitDisplayedMonth("2026-11", authorization: outside))
+        XCTAssertFalse(router.commitDisplayedMonth("2026-12", authorization: outside))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-11"))
+
+        XCTAssertFalse(router.commitDisplayedMonth("2026-12", authorization: .rejected))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-11"))
+
+        let tokenBound = MonthMoveAuthorization.makeForTests(monthKey: "2026-12", requestToken: 4)
+        XCTAssertFalse(router.commitDisplayedMonth("2026-12", requestToken: nil, authorization: tokenBound))
+        XCTAssertFalse(router.commitDisplayedMonth("2026-12", requestToken: 9, authorization: tokenBound))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-11"))
+        XCTAssertTrue(router.commitDisplayedMonth("2026-12", requestToken: 4, authorization: tokenBound))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-12"))
+        XCTAssertFalse(router.commitDisplayedMonth("2026-12", requestToken: 4, authorization: tokenBound))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-12"))
+    }
+
+    /// 月の画面が出ているあいだ、月の URL も依頼になる。日と習慣表の URL も、確認が通るまで開かない。
     func testGuardedURLOpenAsksForAnotherMonth() throws {
         let calendar = try makeCalendar(timeZoneIdentifier: "Asia/Tokyo")
         let now = try makeDate(
@@ -256,10 +360,48 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
         XCTAssertNil(router.monthRequest)
 
+        let tracker = try XCTUnwrap(URL(string: "easyjournal://tracker/2026-10"))
+        XCTAssertTrue(router.open(url: tracker, now: now, calendar: calendar))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        let trackerLeave = try XCTUnwrap(router.pageLeaveRequest)
+        XCTAssertEqual(trackerLeave.destination, .monthlyTracker(monthKey: "2026-10"))
+        XCTAssertFalse(router.resolveGuardedOpen(
+            trackerLeave.destination,
+            requestToken: trackerLeave.token,
+            resolution: .blocked
+        ))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+
         let daily = try XCTUnwrap(URL(string: "easyjournal://daily/2026-10-27"))
         XCTAssertTrue(router.open(url: daily, now: now, calendar: calendar))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        let failedLeave = try XCTUnwrap(router.pageLeaveRequest)
+        XCTAssertFalse(router.resolveGuardedOpen(
+            failedLeave.destination,
+            requestToken: failedLeave.token,
+            resolution: .failed
+        ))
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+
+        XCTAssertTrue(router.open(url: daily, now: now, calendar: calendar))
+        let passLeave = try XCTUnwrap(router.pageLeaveRequest)
+        XCTAssertEqual(router.current, .monthlyLog(monthKey: "2026-10"))
+        let passed = PageLeaveAuthorization.makeForTests(
+            destination: passLeave.destination,
+            requestToken: passLeave.token
+        )
+        XCTAssertTrue(router.resolveGuardedOpen(
+            passLeave.destination,
+            requestToken: passLeave.token,
+            resolution: .passed(passed)
+        ))
         XCTAssertEqual(router.current, .daily(dateKey: "2026-10-27"))
-        XCTAssertNil(router.monthRequest)
+        XCTAssertFalse(router.resolveGuardedOpen(
+            passLeave.destination,
+            requestToken: passLeave.token,
+            resolution: .passed(passed)
+        ))
+        XCTAssertEqual(router.current, .daily(dateKey: "2026-10-27"))
     }
 
     private func octoberRouter() throws -> Router {

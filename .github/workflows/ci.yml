@@ -56,7 +56,7 @@ jobs:
   build-and-test:
     name: シミュレーターでビルドとテスト
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       # actions/checkout の安定版。
       # 2026-10-27 に GitHub の Releases を確認し、最新の安定版は v7.0.1（2026-07-20 公開）。

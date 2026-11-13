@@ -59,3 +59,23 @@ enum MonthMoveDebugJump {
         return argument
     }
 }
+
+/// 画面テストが、月の画面を出ているあいだに URL を開くための印。
+///
+/// Debug ビルドかつメモリ上の保存先で、`easyjournal://` で始まるときだけ返す。
+/// ページは、ここでは変えない。開くときは Router の確認を通す。
+enum MonthMoveDebugOpen {
+    static func url(
+        argument: String?,
+        inMemoryStore: Bool,
+        isDebugBuild: Bool
+    ) -> URL? {
+        guard isDebugBuild, inMemoryStore, let argument else {
+            return nil
+        }
+        guard argument.hasPrefix("easyjournal://") else {
+            return nil
+        }
+        return URL(string: argument)
+    }
+}

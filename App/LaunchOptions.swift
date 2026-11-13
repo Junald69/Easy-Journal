@@ -6,6 +6,8 @@ import Foundation
 struct LaunchOptions {
     /// `-sampleData` が付いているとき true。
     let sampleData: Bool
+    /// 大量タスク UI テストの準備を明示的に要求する。投入は Debug・メモリ内限定。
+    let manyMonthlyTasksFixture: Bool
 
     /// `-openPage` の次に書かれた文字列。無ければ nil。
     let openPage: String?
@@ -26,6 +28,14 @@ struct LaunchOptions {
     /// 月キー。使うかは、アプリの起動側が決める。
     let debugJumpMonth: String?
 
+    /// `-debugOpenURL` の次に書かれた文字列。無ければ nil。
+    /// `easyjournal://` の住所。使うかは、アプリの起動側が決める。
+    let debugOpenURL: String?
+
+    func shouldInstallManyMonthlyTasks(isDebugBuild: Bool) -> Bool {
+        isDebugBuild && inMemoryStore && manyMonthlyTasksFixture
+    }
+
     /// `ProcessInfo.processInfo.arguments` から読む。
     init(arguments: [String] = ProcessInfo.processInfo.arguments) {
         var sampleData = false
@@ -34,6 +44,7 @@ struct LaunchOptions {
         var todayKey: String?
         var failMonthMove: String?
         var debugJumpMonth: String?
+        var debugOpenURL: String?
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]
@@ -65,14 +76,22 @@ struct LaunchOptions {
                     debugJumpMonth = arguments[valueIndex]
                     index = valueIndex
                 }
+            } else if argument == "-debugOpenURL" {
+                let valueIndex = index + 1
+                if valueIndex < arguments.count {
+                    debugOpenURL = arguments[valueIndex]
+                    index = valueIndex
+                }
             }
             index += 1
         }
+        self.manyMonthlyTasksFixture = arguments.contains("-uiTestManyMonthlyTasks")
         self.sampleData = sampleData
         self.openPage = openPage
         self.inMemoryStore = inMemoryStore
         self.todayKey = todayKey
         self.failMonthMove = failMonthMove
         self.debugJumpMonth = debugJumpMonth
+        self.debugOpenURL = debugOpenURL
     }
 }

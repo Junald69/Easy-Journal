@@ -57,6 +57,27 @@ final class MonthMoveRuleTests: XCTestCase {
         }
     }
 
+    /// タイトルと中身は、1つの値を入れ替えたときだけ一緒に変わる。
+    func testMonthDisplayStateReplacesMonthAndContentTogether() {
+        let october = MonthDisplayState(
+            monthKey: "2026-10",
+            textByDateKey: ["2026-10-26": "下書き"],
+            dailyDateKeys: ["2026-10-27"]
+        )
+        let content = MonthlyLogContent(
+            textByDateKey: ["2026-11-01": "翌月"],
+            dailyDateKeys: []
+        )
+        let november = october.replaced(with: content, monthKey: "2026-11")
+        XCTAssertEqual(november.monthKey, "2026-11")
+        XCTAssertEqual(november.textByDateKey["2026-11-01"], "翌月")
+        XCTAssertNil(november.textByDateKey["2026-10-26"])
+        XCTAssertTrue(november.dailyDateKeys.isEmpty)
+        XCTAssertEqual(october.monthKey, "2026-10")
+        XCTAssertEqual(october.textByDateKey["2026-10-26"], "下書き")
+        XCTAssertEqual(october.dailyDateKeys, ["2026-10-27"])
+    }
+
     /// 削除の確認、タスク欄、1行の保存、の順。タスク欄は保存より前。
     func testPhaseBeforeSaveChecksTaskDraftBeforeLogSave() {
         XCTAssertEqual(
