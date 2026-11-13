@@ -136,11 +136,7 @@ final class ScreenshotTests: XCTestCase {
             waitForMonthlyLog(app)
             let lastIndex = 7
             addMonthlyTask("t7", in: app)
-            let list = app.scrollViews["monthlyTaskList"].firstMatch
-            let labels = list.staticTexts.matching(
-                NSPredicate(format: "identifier BEGINSWITH %@", "monthlyTaskLabel-")
-            )
-            XCTAssertEqual(labels.allElementsBoundByIndex.map { $0.label }, (0...7).map { "t" + String($0) })
+            assertMonthlyTaskOrder((0...7).map { "t" + String($0) }, in: app)
 
             let last = revealLastMonthlyTask("未完 t" + String(lastIndex), in: app)
             waitUntilHittable(last, message: "最後のタスクを押せません")
@@ -1357,6 +1353,66 @@ final class ScreenshotTests: XCTestCase {
             button.tap()
             waitUntilGone(alert, message: "タスクの確認が閉じません")
         }
+    }
+
+    /// 型に依存せず ID で名前を探す。表示された順を、一覧内の小さなスクロールで集める。
+    private func assertMonthlyTaskOrder(_ titles: [String], in app: XCUIApplication) {
+        XCTContext.runActivity(named: "8件のタスクの存在と表示順") { _ in
+            let list = app.scrollViews["monthlyTaskList"].firstMatch
+            guard list.waitForExistence(timeout: 5) else {
+                failTaskOrder("タスク一覧がありません", in: app)
+                return
+            }
+            let expected = titles.map { "monthlyTaskLabel-" + $0 }
+            let labels = list.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "monthlyTaskLabel-")
+            )
+            func visibleLabels() -> [(id: String, y: CGFloat)] {
+                let viewport = list.frame.intersection(app.frame)
+                return labels.allElementsBoundByIndex.compactMap { element -> (id: String, y: CGFloat)? in
+                    let frame = element.frame
+                    guard frame.width > 0, frame.height > 0,
+                          frame.intersection(viewport).height >= min(10, frame.height) else { return nil }
+                    return (id: element.identifier, y: frame.midY)
+                }.sorted { $0.y < $1.y }
+            }
+            // 追加時のスクロール位置に依存しない。最初の行が見えるまで一覧だけ戻す。
+            for _ in 0..<8 {
+                if visibleLabels().contains(where: { $0.id == expected.first }) { break }
+                list.swipeDown()
+            }
+            var observed: [String] = []
+            for attempt in 0..<12 {
+                let visible = visibleLabels()
+                for item in visible where observed.contains(item.id) == false {
+                    observed.append(item.id)
+                }
+                // 重複を除いた順だけでなく、同時に見える行の上下関係も確認する。
+                let positions = visible.compactMap { expected.firstIndex(of: $0.id) }
+                guard positions == positions.sorted(), observed == Array(expected.prefix(observed.count)) else {
+                    failTaskOrder("タスクの順序が不正です: " + observed.joined(separator: ","), in: app)
+                    return
+                }
+                if observed == expected { return }
+                if attempt < 11 {
+                    // 画面高より小さい移動にして、行を飛ばさず重ねて観測する。
+                    list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).press(
+                        forDuration: 0.05,
+                        thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+                    )
+                }
+            }
+            failTaskOrder("8件を順に確認できません: " + observed.joined(separator: ","), in: app)
+        }
+    }
+
+    private func failTaskOrder(_ message: String, in app: XCUIApplication) {
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "monthly-task-accessibility-hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        attachScreenshot(app, name: "monthly-task-order-failure")
+        XCTFail(message)
     }
 
     /// 最後のタスクが画面の外なら、タスク欄の中だけを滑らせて出す。ログは滑らせない。
