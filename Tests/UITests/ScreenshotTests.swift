@@ -552,9 +552,7 @@ final class ScreenshotTests: XCTestCase {
         revealMonthlyTask(addButton, in: app)
         addButton.tap()
         let taskField = app.textFields["monthlyTaskTitleField"].firstMatch
-        waitUntilHittable(taskField, message: "タスクの名前欄を押せません")
-        taskField.tap()
-        taskField.typeText("ExtTask")
+        enterFocusedTaskDraft("ExtTask", field: taskField, in: app)
 
         let field = openMonthlyField(app, dateKey: dateKey)
         field.typeText("ExtLog")
@@ -572,7 +570,10 @@ final class ScreenshotTests: XCTestCase {
             "未確定のまま月が移りました"
         )
         XCTAssertFalse(
-            app.descendants(matching: .any)["monthlyTaskLabel-ExtTask"].exists,
+            app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label IN %@",
+                "monthlyTaskRow-", ["未完 ExtTask", "一部 ExtTask", "完了 ExtTask"]
+            )).firstMatch.exists,
             "未確定のタスクが保存されました"
         )
     }
@@ -1355,7 +1356,28 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
-    /// 型に依存せず ID で名前を探す。表示された順を、一覧内の小さなスクロールで集める。
+    /// 自動フォーカス済みなら、タップ可能判定を経由せず現在の入力先へ送る。
+    private func enterFocusedTaskDraft(_ text: String, field: XCUIElement, in app: XCUIApplication) {
+        XCTContext.runActivity(named: "タスク入力欄の焦点と入力値") { _ in
+            XCTAssertTrue(field.waitForExistence(timeout: 5), "タスク入力欄がありません")
+            let focused = NSPredicate(format: "exists == true AND hasKeyboardFocus == true")
+            let ready = XCTNSPredicateExpectation(predicate: focused, object: field)
+            guard XCTWaiter().wait(for: [ready], timeout: 5) == .completed else {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.name = "task-draft-focus-failure"
+                hierarchy.lifetime = .keepAlways
+                add(hierarchy)
+                attachScreenshot(app, name: "task-draft-focus-failure")
+                XCTFail("タスク入力欄に焦点がありません")
+                return
+            }
+            // 対象欄の焦点を確認済み。画面座標の操作可能判定に依存せず入力する。
+            app.typeText(text)
+            XCTAssertEqual(field.value as? String, text, "タスクの下書きに入力できません")
+        }
+    }
+
+    /// 実際の階層では行 ID が子にも付く。記号ボタンの行 ID と読み上げラベルで検証する。
     private func assertMonthlyTaskOrder(_ titles: [String], in app: XCUIApplication) {
         XCTContext.runActivity(named: "8件のタスクの存在と表示順") { _ in
             let list = app.scrollViews["monthlyTaskList"].firstMatch
@@ -1363,17 +1385,23 @@ final class ScreenshotTests: XCTestCase {
                 failTaskOrder("タスク一覧がありません", in: app)
                 return
             }
-            let expected = titles.map { "monthlyTaskLabel-" + $0 }
-            let labels = list.descendants(matching: .any).matching(
-                NSPredicate(format: "identifier BEGINSWITH %@", "monthlyTaskLabel-")
+            let expected = titles.map { "未完 " + $0 }
+            let symbols = list.buttons.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "monthlyTaskRow-")
             )
+            var rowIDByLabel: [String: String] = [:]
             func visibleLabels() -> [(id: String, y: CGFloat)] {
                 let viewport = list.frame.intersection(app.frame)
-                return labels.allElementsBoundByIndex.compactMap { element -> (id: String, y: CGFloat)? in
+                return symbols.allElementsBoundByIndex.compactMap { element -> (id: String, y: CGFloat)? in
                     let frame = element.frame
                     guard frame.width > 0, frame.height > 0,
                           frame.intersection(viewport).height >= min(10, frame.height) else { return nil }
-                    return (id: element.identifier, y: frame.midY)
+                    let label = element.label
+                    if let previousID = rowIDByLabel[label] {
+                        XCTAssertEqual(element.identifier, previousID, "同じ名前に別の行 ID があります")
+                    }
+                    rowIDByLabel[label] = element.identifier
+                    return (id: label, y: frame.midY)
                 }.sorted { $0.y < $1.y }
             }
             // 追加時のスクロール位置に依存しない。最初の行が見えるまで一覧だけ戻す。
@@ -1393,7 +1421,10 @@ final class ScreenshotTests: XCTestCase {
                     failTaskOrder("タスクの順序が不正です: " + observed.joined(separator: ","), in: app)
                     return
                 }
-                if observed == expected { return }
+                if observed == expected {
+                    XCTAssertEqual(Set(rowIDByLabel.values).count, titles.count, "8件の異なる行ではありません")
+                    return
+                }
                 if attempt < 11 {
                     // 画面高より小さい移動にして、行を飛ばさず重ねて観測する。
                     list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).press(
