@@ -7,10 +7,34 @@ struct MonthlyPageNavigation: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            swipeArea(identifier: "monthlyPageSwipeLeading")
             pageButton(tracker: false)
             pageButton(tracker: true)
+            swipeArea(identifier: "monthlyPageSwipeTrailing")
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// ボタン・入力欄・スクロールの祖先にはジェスチャーを付けない。
+    /// 左右の余白のみをスワイプの入口にして、操作領域を重ねない。
+    private func swipeArea(identifier: String) -> some View {
+        Color.clear
+            .frame(minWidth: 44, maxWidth: .infinity)
+            .frame(height: 44)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 30).onEnded { gesture in
+                guard let month = currentPage.monthlyKey,
+                      abs(gesture.translation.width) > 40,
+                      abs(gesture.translation.width) > abs(gesture.translation.height) * 1.5 else { return }
+                if gesture.translation.width < 0 && currentPage.isMonthlyTracker == false {
+                    requestPage(.monthlyTracker(monthKey: month))
+                } else if gesture.translation.width > 0 && currentPage.isMonthlyTracker {
+                    requestPage(.monthlyLog(monthKey: month))
+                }
+            })
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("左右にスワイプしてページを切り替え")
+            .accessibilityIdentifier(identifier)
     }
 
     private func pageButton(tracker: Bool) -> some View {

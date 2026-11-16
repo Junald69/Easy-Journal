@@ -238,15 +238,6 @@ struct MonthlySpreadView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(currentPage.isMonthlyTracker ? "monthlyTrackerScreen" : "monthlyLogScreen")
-        .simultaneousGesture(DragGesture(minimumDistance: 40).onEnded { gesture in
-            guard abs(gesture.translation.width) > 80,
-                  abs(gesture.translation.width) > abs(gesture.translation.height) * 1.5 else { return }
-            if gesture.translation.width < 0 && currentPage.isMonthlyTracker == false {
-                requestPage(.monthlyTracker(monthKey: displayedMonthKey))
-            } else if gesture.translation.width > 0 && currentPage.isMonthlyTracker {
-                requestPage(.monthlyLog(monthKey: displayedMonthKey))
-            }
-        })
         .onAppear {
             reload()
         }
