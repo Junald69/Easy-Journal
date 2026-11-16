@@ -16,6 +16,18 @@ enum PageRef: Hashable {
     /// その日のページ（Daily）。`dateKey` は `yyyy-MM-dd`。
     case daily(dateKey: String)
 
+    var monthlyKey: String? {
+        switch self {
+        case .monthlyLog(let key), .monthlyTracker(let key): return key
+        case .daily: return nil
+        }
+    }
+
+    var isMonthlyTracker: Bool {
+        if case .monthlyTracker = self { return true }
+        return false
+    }
+
     /// `-openPage` に渡す文字列から作る。
     /// 形が違う、日付が無い、空白がある、大文字が混ざるときは nil。
     init?(openPage text: String) {

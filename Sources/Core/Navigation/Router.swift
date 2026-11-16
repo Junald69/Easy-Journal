@@ -16,7 +16,7 @@ struct MonthNavigationRequest: Equatable {
 /// 表示している月は、ここだけが持つ。
 /// 起動時と `-openPage` は `open` で最初のページを決める。月の画面が出たあとは、
 /// 別の月の記録を `open` しても表示は変えない。`requestMonth` の依頼になる。
-/// 日のページや習慣表も、月の画面が出ているあいだはすぐ開かない。`pageLeaveRequest` になる。
+/// 左右切替と、別の側を指定した月移動、Daily は `pageLeaveRequest` で確認する。
 /// 月の画面が、◀▶ と同じ確認と保存のあとにだけページを変える。
 /// 月なら `commitDisplayedMonth`、それ以外なら `resolveGuardedOpen` の通過だけ。
 /// そのときだけ、表示しているページが変わる。
@@ -158,8 +158,10 @@ final class Router {
         defer {
             guardsMonthlyNavigation = wasGuarding
         }
-        open(.monthlyLog(monthKey: monthKey))
-        return current == .monthlyLog(monthKey: monthKey)
+        let destination: PageRef = current.isMonthlyTracker
+            ? .monthlyTracker(monthKey: monthKey) : .monthlyLog(monthKey: monthKey)
+        open(destination)
+        return current == destination
     }
 
     /// 月の画面が、日のページや習慣表を開く前の確認を終えたときに呼ぶ。
@@ -196,6 +198,8 @@ final class Router {
             }
             guardsMonthlyNavigation = false
             open(destination)
+            // 左右の移動は Monthly の中。共通画面が消えるまでは保護を続ける。
+            guardsMonthlyNavigation = destination.monthlyKey != nil
             return current == destination
         }
     }
@@ -205,10 +209,9 @@ final class Router {
         guard guardsMonthlyNavigation else {
             return nil
         }
-        guard case .monthlyLog(let monthKey) = ref else {
-            return nil
-        }
-        guard case .monthlyLog(let openMonth) = current else {
+        guard let monthKey = ref.monthlyKey,
+              ref.isMonthlyTracker == current.isMonthlyTracker else { return nil }
+        guard let openMonth = current.monthlyKey else {
             return nil
         }
         guard monthKey != openMonth else {
@@ -220,17 +223,12 @@ final class Router {
         return monthKey
     }
 
-    /// 月の画面が出ていて、月の記録以外を開こうとしているとき true。
+    /// Monthly の表示中、現在と異なるページへ移るとき true。
     private func shouldRequestPageLeave(insteadOf ref: PageRef) -> Bool {
         guard guardsMonthlyNavigation else {
             return false
         }
-        switch ref {
-        case .monthlyLog:
-            return false
-        case .daily, .monthlyTracker:
-            return true
-        }
+        return ref != current
     }
 }
 

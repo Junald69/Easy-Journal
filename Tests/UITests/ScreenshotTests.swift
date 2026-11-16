@@ -7,6 +7,55 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testMonthlySidesSwipePreservesDataAndRightMonthPosition() {
+        let app = launchMonthly()
+        waitForMonthlyLog(app)
+        app.swipeLeft()
+        XCTAssertTrue(app.descendants(matching: .any)["monthlyTrackerScreen"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
+        goToMonth(button: "monthlyNextButton", title: "2026年 11月", in: app)
+        XCTAssertEqual(app.descendants(matching: .any)["currentPageText"].label, "tracker:2026-11")
+        XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
+        goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
+        app.swipeRight()
+        waitForMonthlyLog(app)
+        XCTAssertTrue(monthlyTaskButton("未完 今月のねらい", in: app).exists)
+        waitUntilTextShows(app, dateKey: "2026-10-24", text: "資料")
+    }
+
+    func testSideMoveBlocksTaskDraftAndKeepsLogAndIndicator() {
+        let app = launchMonthly(includeSampleData: false)
+        waitForMonthlyLog(app)
+        app.buttons["monthlyTaskAddButton"].tap()
+        let task = app.textFields["monthlyTaskTitleField"].firstMatch
+        enterFocusedTaskDraft("KeepTask", field: task, in: app)
+        let log = openMonthlyField(app, dateKey: "2026-10-26")
+        log.typeText("KeepLog")
+        app.buttons["monthlyRightPageButton"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["monthlyTaskDraftBlockMessage"].waitForExistence(timeout: 5))
+        XCTAssertTrue((task.value as? String ?? "").contains("KeepTask"))
+        XCTAssertTrue((log.value as? String ?? "").contains("KeepLog"))
+        XCTAssertEqual(app.buttons["monthlyLeftPageButton"].value as? String, "選択中")
+        XCTAssertFalse(app.descendants(matching: .any)["monthlyTrackerScreen"].exists)
+    }
+
+    func testSideMoveDeleteConfirmationKeepsLeftUntilCancelled() {
+        let app = launchMonthly()
+        waitForMonthlyLog(app)
+        let field = openMonthlyField(app, dateKey: "2026-10-24")
+        deleteAllCharacters(in: field, knownText: "資料", app: app)
+        app.buttons["monthlyRightPageButton"].tap()
+        let alert = app.alerts["この行を消しますか？"].firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["monthlyTrackerScreen"].exists)
+        XCTAssertEqual(app.buttons["monthlyLeftPageButton"].value as? String, "選択中")
+        alert.buttons["キャンセル"].tap()
+        waitUntilGone(alert, message: "確認が閉じません")
+        waitUntilTextShows(app, dateKey: "2026-10-24", text: "資料")
+        app.buttons["monthlyRightPageButton"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["monthlyTrackerScreen"].waitForExistence(timeout: 5))
+    }
+
     /// 開いた直後（今日の 27 日）と、上までスクロールしたあと（1 日）。
     func testMonthlyLogScreenshots() {
         let app = launchMonthly()
@@ -607,10 +656,14 @@ final class ScreenshotTests: XCTestCase {
         requestDebugOpen(in: app, untilMarker: "currentPageText")
         let page = app.descendants(matching: .any)["currentPageText"]
         XCTAssertEqual(page.label, "tracker:2026-10")
+        XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
         XCTAssertFalse(
             app.descendants(matching: .any)["monthlyLogScreen"].exists,
             "保存できたあとも月の画面が残っています"
         )
+        app.buttons["monthlyLeftPageButton"].tap()
+        waitForMonthlyLog(app)
+        waitUntilTextShows(app, dateKey: dateKey, text: "KeepDraft")
     }
 
     /// 外からの月移動でも、削除確認のキャンセルは記録を残す。「消す」はその行だけ消して、月は移さない。
