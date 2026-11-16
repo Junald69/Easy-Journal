@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// いま開いているページを出す。月の記録だけ、Monthly Log の画面。それ以外は仮の画面。
+/// Monthly 左右は同じ親 View を保ち、Monthly 全体の表示期間だけナビゲーションを保護する。
 ///
 /// 開いている月は Router だけが持つ。◀▶ も、外からの依頼も、月の画面を出る開き方も、確認と保存ができたときだけ Router を変える。
 struct RootPageView: View {
@@ -41,10 +41,12 @@ struct RootPageView: View {
     @ViewBuilder
     private var page: some View {
         switch router.current {
-        case .monthlyLog(let monthKey):
-            MonthlyLogPageView(
+        case .monthlyLog(let monthKey), .monthlyTracker(let monthKey):
+            MonthlySpreadView(
                 monthKey: monthKey,
                 todayKey: todayKey,
+                currentPage: router.current,
+                requestPage: { router.open($0) },
                 openMonth: { destination, requestToken, authorization in
                     router.commitDisplayedMonth(
                         destination,
@@ -66,7 +68,7 @@ struct RootPageView: View {
                 },
                 monthMoveFailure: monthMoveFailure
             )
-            .id("monthlyLogPage")
+            .id("monthlySpread")
             .onAppear {
                 router.beginGuardingMonthlyNavigation()
             }

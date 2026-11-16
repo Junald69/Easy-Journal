@@ -1,7 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// 月の左ページ（Monthly Log と Monthly Task）。
+/// Monthly 左右の共通親。左は Monthly Log / Task、右は先行 PR の仮画面。
 ///
 /// 文章の部分だけ、その場で1行を編集できる。保存は `setLogLine` だけ。
 /// 文章がある行を空にして確定するときは、消す前に確認する。
@@ -16,11 +16,14 @@ import SwiftUI
 /// 成功するまで Router は変えない。下書きは、今の月のまま見える。
 /// 月のタスクの追加・記号・削除は、JournalStore だけを通す。画面から直接は足さない。
 /// 翌月への繰越、タスク名の編集、並べ替え、履歴の画面は、ここでは作らない。
-struct MonthlyLogPageView: View {
+// この共通親が編集状態・承諾・遅延処理の寿命を持つ。左右の子 View の寿命には依存しない。
+struct MonthlySpreadView: View {
     /// 起動時に Router が開いている月（`yyyy-MM`）。表示はそのあと `shown` が持つ。
     let monthKey: String
     /// 今日の日付キー（`yyyy-MM-dd`）。帯とスクロールに使う。
     let todayKey: String
+    let currentPage: PageRef
+    let requestPage: (PageRef) -> Void
     /// 移れたときだけ呼ぶ。保存と読み込みが成功したあとで、Router の月を変える。
     ///
     /// 2つ目は、外からの依頼番号。◀▶ のときは nil。
@@ -41,6 +44,8 @@ struct MonthlyLogPageView: View {
     init(
         monthKey: String,
         todayKey: String,
+        currentPage: PageRef,
+        requestPage: @escaping (PageRef) -> Void,
         openMonth: @escaping (String, Int?, MonthMoveAuthorization) -> Bool,
         monthRequest: MonthNavigationRequest? = nil,
         acknowledgeMonthRequest: @escaping () -> Void = {},
@@ -50,6 +55,8 @@ struct MonthlyLogPageView: View {
     ) {
         self.monthKey = monthKey
         self.todayKey = todayKey
+        self.currentPage = currentPage
+        self.requestPage = requestPage
         self.openMonth = openMonth
         self.monthRequest = monthRequest
         self.acknowledgeMonthRequest = acknowledgeMonthRequest
@@ -173,7 +180,12 @@ struct MonthlyLogPageView: View {
         GeometryReader { geo in
             VStack(spacing: 0) {
                 topBar
-                logList
+                MonthlyPageNavigation(currentPage: currentPage, requestPage: requestPage)
+                if currentPage.isMonthlyTracker {
+                    MonthlyTrackerPlaceholder(monthKey: displayedMonthKey)
+                } else {
+                    logList
+                }
                 if loadFailed || moveProblem == .load {
                     Text("記録を読み込めませんでした")
                         .font(DesignTokens.Fonts.subText)
@@ -215,7 +227,9 @@ struct MonthlyLogPageView: View {
                         .accessibilityIdentifier("monthlyTaskDraftBlockMessage")
                         .accessibilityFocused($taskDraftBlockFocused)
                 }
-                taskSection(maxSectionHeight: geo.size.height * 0.4)
+                if currentPage.isMonthlyTracker == false {
+                    taskSection(maxSectionHeight: geo.size.height * 0.4)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
@@ -223,7 +237,7 @@ struct MonthlyLogPageView: View {
             GridPaperBackground()
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("monthlyLogScreen")
+        .accessibilityIdentifier(currentPage.isMonthlyTracker ? "monthlyTrackerScreen" : "monthlyLogScreen")
         .onAppear {
             reload()
         }
@@ -759,6 +773,7 @@ struct MonthlyLogPageView: View {
         guard let request else {
             return
         }
+        moveCommitGate.invalidatePending()
         if request.monthKey == displayedMonthKey {
             acknowledgeMonthRequest()
             return
@@ -781,6 +796,7 @@ struct MonthlyLogPageView: View {
         guard let request else {
             return
         }
+        moveCommitGate.invalidatePending()
         if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
             deleteConfirmFromMonthMove = pendingDeleteDateKey != nil
             monthMoveBlockedByOpenConfirm = true
@@ -796,6 +812,7 @@ struct MonthlyLogPageView: View {
     /// 削除の確認、タスク欄の未確定、一言日記の保存。確認なしでは消さない。
     /// 保存に失敗したら、ページは変えず下書きを残す。
     private func startGuardedNavigation(_ navigation: GuardedNavigation) {
+        moveCommitGate.invalidatePending()
         if pendingDeleteDateKey != nil || pendingDeleteTask != nil {
             stopPageLeave(navigation, resolution: .blocked)
             return
@@ -870,7 +887,11 @@ struct MonthlyLogPageView: View {
         case .month(let destination, let requestToken):
             prepareAndMove(to: destination, requestToken: requestToken)
         case .leave(let request):
-            schedulePageLeave(request)
+            if let month = request.destination.monthlyKey, month != displayedMonthKey {
+                prepareAndMove(to: month, requestToken: nil, pageRequest: request)
+            } else {
+                schedulePageLeave(request)
+            }
         }
     }
 
@@ -916,7 +937,13 @@ struct MonthlyLogPageView: View {
     /// 保存に失敗したら「保存できませんでした」。今の月のまま。前の読み込み失敗は消す。
     /// 読めなかったら「記録を読み込めませんでした」。今の月の行と入力は残す。前の保存失敗は消す。
     /// エラーを消すためだけに、ページを作ったり消したりはしない。
-    private func prepareAndMove(to destination: String, requestToken: Int?) {
+    private func prepareAndMove(to destination: String, requestToken: Int?, pageRequest: PageLeaveRequest? = nil) {
+        var prepared = false
+        defer {
+            if prepared == false, let request = pageRequest {
+                _ = resolvePageLeave(request.destination, request.token, .failed)
+            }
+        }
         if let injection = consumePageFailureInjection() {
             switch injection {
             case .save:
@@ -960,11 +987,13 @@ struct MonthlyLogPageView: View {
             recordMoveProblem(problem)
             return
         }
+        prepared = true
         applyDestination(
             content,
             tasks: storedTasks,
             monthKey: destination,
-            requestToken: requestToken
+            requestToken: requestToken,
+            pageRequest: pageRequest
         )
     }
 
@@ -979,7 +1008,8 @@ struct MonthlyLogPageView: View {
         _ content: MonthlyLogContent,
         tasks storedTasks: [JournalTask],
         monthKey destination: String,
-        requestToken: Int?
+        requestToken: Int?,
+        pageRequest: PageLeaveRequest? = nil
     ) {
         isMovingEdit = true
         editFocusLanded = false
@@ -991,6 +1021,10 @@ struct MonthlyLogPageView: View {
             requestToken: requestToken
         )
         let commitMonth = openMonth
+        let resolve = resolvePageLeave
+        let pageAuthorization = pageRequest.map {
+            PageLeaveAuthorization.forSuccessfulLeave(destination: $0.destination, requestToken: $0.token)
+        }
         let nextTasks = storedTasks.map { task in
             MonthlyTaskItem(task: task)
         }
@@ -1001,7 +1035,12 @@ struct MonthlyLogPageView: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                let committed = commitMonth(destination, requestToken, authorization)
+                let committed: Bool
+                if let request = pageRequest, let pageAuthorization {
+                    committed = resolve(request.destination, request.token, .passed(pageAuthorization))
+                } else {
+                    committed = commitMonth(destination, requestToken, authorization)
+                }
                 guard committed else {
                     isMovingEdit = false
                     if editingDateKey != nil {
@@ -1583,7 +1622,7 @@ private enum GuardedNavigation {
 }
 
 /// 遅れた移動が、画面が閉じたあとに走らないようにする番号。
-private final class MoveCommitGate {
+final class MoveCommitGate {
     private var current = 0
 
     func issue() -> Int {
