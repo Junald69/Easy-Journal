@@ -68,7 +68,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     func testTrackerHorizontalScrollDoesNotTurnPage() {
-        let app = launchMonthly(extraArguments: ["-wideTrackerSample"])
+        let app = launchMonthly(extraArguments: ["-wideTrackerSample", "-trackerDiagnostics"])
         waitForMonthlyLog(app)
         app.buttons["monthlyRightPageButton"].tap()
         let grid = app.scrollViews["monthlyTrackerGrid"].firstMatch
@@ -76,19 +76,67 @@ final class ScreenshotTests: XCTestCase {
         grid.swipeLeft()
         let last = trackerCell(app, date: "2026-10-27", habit: "習慣8")
         var attempts = 0
-        while last.isHittable == false && attempts < 4 {
+        while trackerCellIsFullyVisible(last, in: grid, app: app) == false && attempts < 4 {
             grid.swipeLeft()
             attempts += 1
         }
-        waitUntilHittable(last, message: "最後の習慣を押せません")
+        let visible = NSPredicate { _, _ in self.trackerCellIsFullyVisible(last, in: grid, app: app) }
+        let ready = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: visible, object: last)], timeout: 5)
+        guard ready == .completed else {
+            captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "cell-not-fully-visible", full: true)
+            XCTFail("最後の習慣全体が表示され操作可能になりません")
+            return
+        }
+        captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "before-tap", full: false)
+        guard last.value as? String == "未チェック", last.isEnabled else {
+            captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "unexpected-initial-state", full: true)
+            XCTFail("習慣8の初期状態が未チェック・操作可能ではありません")
+            return
+        }
         XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
         waitForMonthTitle("2026年 10月", in: app)
         last.tap()
-        waitForTrackerValue(last, "チェック済み")
+        let checked = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND value == %@", "チェック済み"), object: last)
+        let result = XCTWaiter().wait(for: [checked], timeout: 5)
+        captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "after-tap", full: result != .completed)
+        XCTAssertEqual(result, .completed, "習慣8の保存・再読込後のチェック状態が一致しません")
+        XCTAssertFalse(app.descendants(matching: .any)["monthlyTrackerError"].exists)
         attachScreenshot(app, name: "habit-tracker-wide")
         let swipe = app.descendants(matching: .any)["monthlyPageSwipeLeading"].firstMatch
         swipe.swipeRight()
         waitForMonthlyLog(app)
+    }
+
+    private func trackerCellIsFullyVisible(_ cell: XCUIElement, in grid: XCUIElement, app: XCUIApplication) -> Bool {
+        guard cell.exists else { return false }
+        let frame = cell.frame
+        let viewport = grid.frame.intersection(app.frame)
+        guard frame.width >= 44, frame.height >= 44, viewport.isEmpty == false else { return false }
+        return viewport.insetBy(dx: -1, dy: -1).contains(frame) && cell.isHittable
+    }
+
+    private func captureTrackerDiagnostic(_ app: XCUIApplication, cell: XCUIElement,
+                                          grid: XCUIElement, stage: String, full: Bool) {
+        XCTContext.runActivity(named: "Tracker診断: " + stage) { _ in
+            let evidence = app.descendants(matching: .any)["trackerOperationEvidence"].firstMatch
+            let error = app.descendants(matching: .any)["monthlyTrackerError"].firstMatch
+            let exists = cell.exists
+            let cellFrame = exists ? cell.frame : CGRect.zero
+            let cellValue = exists ? String(describing: cell.value) : "missing"
+            let detail = "exists=\(exists) cell=\(cellFrame) value=\(cellValue) enabled=\(exists && cell.isEnabled) hittable=\(exists && cell.isHittable)\ngrid=\(grid.exists ? grid.frame : CGRect.zero) window=\(app.frame)\nerror=\(error.exists ? error.label : "none")\noperation=\(evidence.exists ? evidence.label : "unavailable")"
+            let attachment = XCTAttachment(string: detail)
+            attachment.name = "tracker-cell-" + stage
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            if full {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.name = "tracker-hierarchy-" + stage
+                hierarchy.lifetime = .keepAlways
+                add(hierarchy)
+                attachScreenshot(app, name: "tracker-failure-" + stage)
+            }
+        }
     }
 
     private func trackerCell(_ app: XCUIApplication, date: String, habit: String) -> XCUIElement {
@@ -1509,22 +1557,48 @@ final class ScreenshotTests: XCTestCase {
 
     /// 自動フォーカス済みなら、タップ可能判定を経由せず現在の入力先へ送る。
     private func enterFocusedTaskDraft(_ text: String, field: XCUIElement, in app: XCUIApplication) {
-        XCTContext.runActivity(named: "タスク入力欄の焦点と入力値") { _ in
-            XCTAssertTrue(field.waitForExistence(timeout: 5), "タスク入力欄がありません")
-            let focused = NSPredicate(format: "exists == true AND hasKeyboardFocus == true")
-            let ready = XCTNSPredicateExpectation(predicate: focused, object: field)
-            guard XCTWaiter().wait(for: [ready], timeout: 5) == .completed else {
-                let hierarchy = XCTAttachment(string: app.debugDescription)
-                hierarchy.name = "task-draft-focus-failure"
-                hierarchy.lifetime = .keepAlways
-                add(hierarchy)
-                attachScreenshot(app, name: "task-draft-focus-failure")
-                XCTFail("タスク入力欄に焦点がありません")
+        XCTContext.runActivity(named: "自動フォーカスと実際の入力先を確認") { _ in
+            guard field.waitForExistence(timeout: 5) else {
+                captureTaskFocus(app, field: field, stage: "missing-input", full: true)
+                XCTFail("タスク入力欄がありません")
                 return
             }
-            // 対象欄の焦点を確認済み。画面座標の操作可能判定に依存せず入力する。
+            let focused = NSPredicate(format: "exists == true AND hasKeyboardFocus == true")
+            let keyboard = app.keyboards.firstMatch
+            // AX のフォーカス情報が遅れても、キーボードが開いていれば実際の入力結果で判定する。
+            // 欄へのタップで自動フォーカス不良を隠すことはしない。
+            let inputReady = NSPredicate { _, _ in field.exists && (focused.evaluate(with: field) || keyboard.exists) }
+            let ready = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: inputReady, object: field)], timeout: 5)
+            captureTaskFocus(app, field: field, stage: "before-input", full: ready != .completed)
+            guard ready == .completed else {
+                XCTFail("自動フォーカス後の入力準備が成立しません")
+                return
+            }
             app.typeText(text)
-            XCTAssertEqual(field.value as? String, text, "タスクの下書きに入力できません")
+            let correct = field.value as? String == text
+            captureTaskFocus(app, field: field, stage: "after-input", full: !correct)
+            XCTAssertTrue(correct, "タスク入力欄へ自動入力できません: " + String(describing: field.value))
+        }
+    }
+
+    private func captureTaskFocus(_ app: XCUIApplication, field: XCUIElement, stage: String, full: Bool) {
+        let exists = field.exists
+        let axFocus = exists && NSPredicate(format: "hasKeyboardFocus == true").evaluate(with: field)
+        XCTContext.runActivity(named: "タスク焦点診断 \(stage): AX=\(axFocus) keyboard=\(app.keyboards.firstMatch.exists)") { _ in
+            let frame = exists ? field.frame : CGRect.zero
+            let value = exists ? String(describing: field.value) : "missing"
+            let detail = "exists=\(exists) frame=\(frame) value=\(value) hittable=\(exists && field.isHittable) AXfocus=\(axFocus) keyboard=\(app.keyboards.firstMatch.exists)"
+            let attachment = XCTAttachment(string: detail)
+            attachment.name = "task-focus-" + stage
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            if full {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.name = "task-focus-hierarchy-" + stage
+                hierarchy.lifetime = .keepAlways
+                add(hierarchy)
+                attachScreenshot(app, name: "task-focus-failure-" + stage)
+            }
         }
     }
 

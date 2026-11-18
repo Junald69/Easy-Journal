@@ -13,6 +13,8 @@ struct MonthlyTrackerPageView: View {
     @State private var state = MonthlyTrackerState()
     @State private var forcedFailure = TrackerDebugFailure.requested()
     @State private var savedSinceLoad = false
+    @State private var saveEvidence = "save=none"
+    @State private var readEvidence = "read=none"
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.s) {
@@ -42,6 +44,19 @@ struct MonthlyTrackerPageView: View {
         .foregroundStyle(DesignTokens.ink)
         .padding(.horizontal, DesignTokens.Spacing.m)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .topTrailing) {
+            #if DEBUG
+            if TrackerDebugFailure.diagnosticsEnabled {
+                Text(saveEvidence + " | " + readEvidence)
+                    .font(.caption2)
+                    .frame(width: 1, height: 1)
+                    .clipped()
+                    .opacity(0.01)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("trackerOperationEvidence")
+            }
+            #endif
+        }
         .onAppear { state.load(monthKey: monthKey, read: readContent) }
         .onChange(of: monthKey) { _, key in state.load(monthKey: key, read: readContent) }
     }
@@ -141,9 +156,18 @@ struct MonthlyTrackerPageView: View {
             forcedFailure = nil
             throw TrackerDebugFailure.forced
         }
-        let content = try JournalStore(context: modelContext).monthlyTrackerContent(monthKey: key)
-        savedSinceLoad = false
-        return content
+        do {
+            let content = try JournalStore(context: modelContext).monthlyTrackerContent(monthKey: key)
+            if TrackerDebugFailure.diagnosticsEnabled {
+                let checks = content.checks.map { $0.habitID.uuidString + ":" + $0.dateKey }.sorted().joined(separator: ",")
+                readEvidence = "read=success month=" + key + " checks=" + checks
+            }
+            savedSinceLoad = false
+            return content
+        } catch {
+            if TrackerDebugFailure.diagnosticsEnabled { readEvidence = "read=failure month=" + key + " " + error.localizedDescription }
+            throw error
+        }
     }
 
     private func writeCheck(_ habitID: UUID, _ date: String) throws -> Bool {
@@ -151,15 +175,31 @@ struct MonthlyTrackerPageView: View {
             forcedFailure = nil
             throw TrackerDebugFailure.forced
         }
-        let done = try JournalStore(context: modelContext).toggleHabit(habitID: habitID, dateKey: date)
-        savedSinceLoad = true
-        return done
+        do {
+            let done = try JournalStore(context: modelContext).toggleHabit(habitID: habitID, dateKey: date)
+            if TrackerDebugFailure.diagnosticsEnabled {
+                saveEvidence = "save=success habit=\(habitID) date=\(date) done=\(done)"
+            }
+            savedSinceLoad = true
+            return done
+        } catch {
+            if TrackerDebugFailure.diagnosticsEnabled { saveEvidence = "save=failure " + error.localizedDescription }
+            throw error
+        }
     }
 }
 
 /// 既存の月移動テストと同様、明示引数・Debug・メモリ内ストアだけで1回失敗させる。
 enum TrackerDebugFailure: Error {
     case forced
+    static var diagnosticsEnabled: Bool {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        return arguments.contains("-inMemoryStore") && arguments.contains("-trackerDiagnostics")
+        #else
+        return false
+        #endif
+    }
     static func requested() -> String? {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
