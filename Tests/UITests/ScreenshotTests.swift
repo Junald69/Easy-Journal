@@ -7,6 +7,99 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testTrackerChecksPersistAndMonthsRemainSeparate() {
+        let app = launchMonthly()
+        waitForMonthlyLog(app)
+        app.buttons["monthlyRightPageButton"].tap()
+        let today = trackerCell(app, date: "2026-10-27", habit: "水を飲む")
+        waitUntilHittable(today, message: "今日のチェックを押せません")
+        XCTAssertEqual(today.value as? String, "未チェック")
+        XCTAssertGreaterThanOrEqual(today.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(today.frame.height, 44)
+        let future = trackerCell(app, date: "2026-10-28", habit: "水を飲む")
+        XCTAssertTrue(future.exists)
+        XCTAssertFalse(future.isEnabled)
+        today.tap()
+        waitForTrackerValue(today, "チェック済み")
+        let past = trackerCell(app, date: "2026-10-26", habit: "水を飲む")
+        past.tap()
+        waitForTrackerValue(past, "チェック済み")
+        attachScreenshot(app, name: "habit-tracker-sample")
+        app.buttons["monthlyLeftPageButton"].tap()
+        waitForMonthlyLog(app)
+        app.buttons["monthlyRightPageButton"].tap()
+        waitForTrackerValue(today, "チェック済み")
+        goToMonth(button: "monthlyNextButton", title: "2026年 11月", in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["monthlyTrackerEmpty"].waitForExistence(timeout: 5))
+        XCTAssertFalse(today.exists)
+        XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
+        goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
+        waitForTrackerValue(today, "チェック済み")
+        waitUntilHittable(past, message: "過去日のチェックを押せません")
+        past.tap()
+        waitForTrackerValue(past, "未チェック")
+    }
+
+    func testTrackerFailuresRetryWithoutDoubleToggle() {
+        for mode in ["read", "save", "reload"] {
+            XCTContext.runActivity(named: "Tracker失敗と再試行: " + mode) { _ in
+                let app = launchMonthly(extraArguments: ["-failTracker", mode])
+                waitForMonthlyLog(app)
+                app.buttons["monthlyRightPageButton"].tap()
+                let cell = trackerCell(app, date: "2026-10-27", habit: "水を飲む")
+                if mode != "read" {
+                    waitUntilHittable(cell, message: "チェックを押せません")
+                    cell.tap()
+                }
+                let error = app.descendants(matching: .any)["monthlyTrackerError"].firstMatch
+                XCTAssertTrue(error.waitForExistence(timeout: 5))
+                let expected = mode == "read" ? "習慣を読み込めませんでした"
+                    : mode == "save" ? "チェックを保存できませんでした"
+                    : "チェックは保存しましたが、再読み込みできませんでした"
+                XCTAssertEqual(error.label, expected)
+                if mode == "save" { XCTAssertEqual(cell.value as? String, "未チェック") }
+                if mode == "reload" { XCTAssertFalse(cell.exists) }
+                app.buttons["monthlyTrackerRetry"].firstMatch.tap()
+                waitForTrackerValue(cell, mode == "read" ? "未チェック" : "チェック済み")
+                XCTAssertFalse(error.exists)
+                app.terminate()
+            }
+        }
+    }
+
+    func testTrackerHorizontalScrollDoesNotTurnPage() {
+        let app = launchMonthly(extraArguments: ["-wideTrackerSample"])
+        waitForMonthlyLog(app)
+        app.buttons["monthlyRightPageButton"].tap()
+        let grid = app.scrollViews["monthlyTrackerGrid"].firstMatch
+        XCTAssertTrue(grid.waitForExistence(timeout: 5))
+        grid.swipeLeft()
+        let last = trackerCell(app, date: "2026-10-27", habit: "習慣8")
+        var attempts = 0
+        while last.isHittable == false && attempts < 4 {
+            grid.swipeLeft()
+            attempts += 1
+        }
+        waitUntilHittable(last, message: "最後の習慣を押せません")
+        XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
+        waitForMonthTitle("2026年 10月", in: app)
+        last.tap()
+        waitForTrackerValue(last, "チェック済み")
+        attachScreenshot(app, name: "habit-tracker-wide")
+        let swipe = app.descendants(matching: .any)["monthlyPageSwipeLeading"].firstMatch
+        swipe.swipeRight()
+        waitForMonthlyLog(app)
+    }
+
+    private func trackerCell(_ app: XCUIApplication, date: String, habit: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", date + " " + habit)).firstMatch
+    }
+
+    private func waitForTrackerValue(_ cell: XCUIElement, _ value: String) {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND value == %@", value), object: cell)
+        XCTAssertEqual(XCTWaiter().wait(for: [ready], timeout: 5), .completed, "チェック状態が一致しません")
+    }
+
     func testMonthlySidesSwipePreservesDataAndRightMonthPosition() {
         let app = launchMonthly()
         waitForMonthlyLog(app)
@@ -16,7 +109,7 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["monthlyTrackerScreen"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
         goToMonth(button: "monthlyNextButton", title: "2026年 11月", in: app)
-        XCTAssertEqual(app.descendants(matching: .any)["currentPageText"].label, "tracker:2026-11")
+        XCTAssertEqual(app.descendants(matching: .any)["monthlyTrackerMonth"].value as? String, "2026-11")
         XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
         goToMonth(button: "monthlyPreviousButton", title: "2026年 10月", in: app)
         swipeArea.swipeRight()
@@ -652,15 +745,15 @@ final class ScreenshotTests: XCTestCase {
         requestDebugOpen(in: app, untilMarker: "monthlySaveError")
         waitForMonthTitle("2026年 10月", in: app)
         XCTAssertFalse(
-            app.descendants(matching: .any)["currentPageText"].exists,
+            app.descendants(matching: .any)["monthlyTrackerMonth"].exists,
             "保存に失敗したのにページが変わりました"
         )
         let shown = field.value as? String ?? ""
         XCTAssertTrue(shown.contains("KeepDraft"), "失敗した下書きが見えません: " + shown)
 
-        requestDebugOpen(in: app, untilMarker: "currentPageText")
-        let page = app.descendants(matching: .any)["currentPageText"]
-        XCTAssertEqual(page.label, "tracker:2026-10")
+        requestDebugOpen(in: app, untilMarker: "monthlyTrackerMonth")
+        let page = app.descendants(matching: .any)["monthlyTrackerMonth"]
+        XCTAssertEqual(page.value as? String, "2026-10")
         XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
         XCTAssertFalse(
             app.descendants(matching: .any)["monthlyLogScreen"].exists,

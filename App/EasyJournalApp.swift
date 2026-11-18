@@ -94,6 +94,9 @@ struct EasyJournalApp: App {
                 let context = ModelContext(container)
                 let store = JournalStore(context: context)
                 try SampleData.install(into: store, context: context)
+                if options.wideTrackerSample {
+                    try SampleData.installWideTracker(into: store, context: context)
+                }
             }
             if options.shouldInstallManyMonthlyTasks(isDebugBuild: EasyJournalApp.debugBuild) {
                 let store = JournalStore(context: ModelContext(container))

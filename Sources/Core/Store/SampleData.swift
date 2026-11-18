@@ -79,6 +79,20 @@ enum SampleData {
         }
     }
 
+    /// 幅不足の画面確認用。起動側が Debug・サンプル要求・メモリ内ストアを確認して呼ぶ。
+    static func installWideTracker(into store: JournalStore, context: ModelContext) throws {
+        let monthly = try store.findOrCreateMonthly(monthKey: monthKey)
+        let existing = Set((monthly.habits ?? []).map { $0.name })
+        for index in 3...8 {
+            let name = "習慣" + String(index)
+            if existing.contains(name) { continue }
+            let habit = Habit(name: name, shortLabel: String(index), sortOrder: index - 1)
+            context.insert(habit)
+            habit.monthly = monthly
+        }
+        try context.save()
+    }
+
     /// チェックを1回だけ付ける。もう付いていると `toggleHabit` は外すので、外れたら失敗にする。
     private static func turnHabitOn(habitID: UUID, dateKey: String, store: JournalStore) throws {
         let turnedOn = try store.toggleHabit(habitID: habitID, dateKey: dateKey)
