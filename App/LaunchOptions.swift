@@ -8,6 +8,7 @@ struct LaunchOptions {
     let sampleData: Bool
     /// 大量タスク UI テストの準備を明示的に要求する。投入は Debug・メモリ内限定。
     let manyMonthlyTasksFixture: Bool
+    let wideTrackerSample: Bool
 
     /// `-openPage` の次に書かれた文字列。無ければ nil。
     let openPage: String?
@@ -85,6 +86,7 @@ struct LaunchOptions {
             }
             index += 1
         }
+        self.wideTrackerSample = arguments.contains("-wideTrackerSample")
         self.manyMonthlyTasksFixture = arguments.contains("-uiTestManyMonthlyTasks")
         self.sampleData = sampleData
         self.openPage = openPage

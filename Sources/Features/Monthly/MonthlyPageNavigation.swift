@@ -53,18 +53,3 @@ struct MonthlyPageNavigation: View {
         .accessibilityIdentifier(tracker ? "monthlyRightPageButton" : "monthlyLeftPageButton")
     }
 }
-
-/// 先行 PR はナビゲーションのみ。習慣の読取・保存は後続 PR で実装する。
-struct MonthlyTrackerPlaceholder: View {
-    let monthKey: String
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("HABIT TRACKER").font(DesignTokens.Fonts.heading)
-            Text("習慣表は準備中です").font(DesignTokens.Fonts.bodyText)
-            Text("tracker:" + monthKey).accessibilityIdentifier("currentPageText")
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-    }
-}
