@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "source_runs": [
+    44312413692,
+    44237628961
+  ],
+  "core_allowance_seconds": 60,
+  "estimated_seconds": {
+    "A": 908.956,
+    "B": 913.5930000000001
+  },
+  "ui_seconds": {
+    "testAfterTaskBlockAddingTaskRestoresFocusLossSave": 168.801,
+    "testClearingBlockedTaskDraftRestoresLogEditor": 68.244,
+    "testClearingLogLineThenTappingTaskSymbolKeepsTask": 196.47,
+    "testExternalDeleteConfirmationCancelKeepsLineAndDeleteRemovesOnlyThatLine": 142.828,
+    "testExternalLogSaveFailureKeepsDraftAndAllowsEditing": 68.406,
+    "testExternalMonthChangeMatchesRouterAndKeepsSourceLine": 44.157,
+    "testExternalMonthCrossesYear": 42.825,
+    "testExternalTaskDraftBlocksMove": 75.225,
+    "testGuardedTrackerOpenKeepsDraftUntilSaveThenSwitches": 80.729,
+    "testManyMonthlyTasksLastSymbolStaysReachable": 75.078,
+    "testMonthlyLogDeleteConfirmationRestoresOrClearsLine": 58.288,
+    "testMonthlyLogEditKeepsTextOnAnotherRow": 33.488,
+    "testMonthlyLogLargeTextScreenshot": 15.791,
+    "testMonthlyLogScreenshots": 26.189,
+    "testMonthlySidesSwipePreservesDataAndRightMonthPosition": 32.953,
+    "testMonthlyTaskScreenshotAndDelete": 159.381,
+    "testMonthMoveDeleteConfirmationCancelAndDelete": 56.54,
+    "testMonthMoveKeepsDeleteConfirmationAndTaskDraft": 71.713,
+    "testMonthMoveLoadFailureClearsWhenRetrySucceeds": 23.644,
+    "testMonthMoveSaveFailureClearsWhenRetrySucceeds": 22.535,
+    "testMonthMoveTaskDraftKeepsLogEditorAndShowsMessage": 36.781,
+    "testMonthNavigationCrossesYear": 21.413,
+    "testMonthNavigationRoundTripKeepsEachMonthSeparate": 35.053,
+    "testSideMoveBlocksTaskDraftAndKeepsLogAndIndicator": 32.061,
+    "testSideMoveDeleteConfirmationKeepsLeftUntilCancelled": 30.545,
+    "testTrackerChecksPersistAndMonthsRemainSeparate": 41.091,
+    "testTrackerFailuresRetryWithoutDoubleToggle": 67.913,
+    "testTrackerHorizontalScrollDoesNotTurnPage": 34.407
+  },
+  "shards": {
+    "A": [
+      "EasyJournalUITests/ScreenshotTests/testAfterTaskBlockAddingTaskRestoresFocusLossSave",
+      "EasyJournalUITests/ScreenshotTests/testExternalDeleteConfirmationCancelKeepsLineAndDeleteRemovesOnlyThatLine",
+      "EasyJournalUITests/ScreenshotTests/testExternalTaskDraftBlocksMove",
+      "EasyJournalUITests/ScreenshotTests/testMonthMoveKeepsDeleteConfirmationAndTaskDraft",
+      "EasyJournalUITests/ScreenshotTests/testClearingBlockedTaskDraftRestoresLogEditor",
+      "EasyJournalUITests/ScreenshotTests/testMonthlyLogDeleteConfirmationRestoresOrClearsLine",
+      "EasyJournalUITests/ScreenshotTests/testMonthMoveDeleteConfirmationCancelAndDelete",
+      "EasyJournalUITests/ScreenshotTests/testTrackerChecksPersistAndMonthsRemainSeparate",
+      "EasyJournalUITests/ScreenshotTests/testMonthNavigationRoundTripKeepsEachMonthSeparate",
+      "EasyJournalUITests/ScreenshotTests/testMonthlyLogEditKeepsTextOnAnotherRow",
+      "EasyJournalUITests/ScreenshotTests/testSideMoveBlocksTaskDraftAndKeepsLogAndIndicator",
+      "EasyJournalUITests/ScreenshotTests/testMonthlyLogScreenshots",
+      "EasyJournalUITests/ScreenshotTests/testMonthMoveLoadFailureClearsWhenRetrySucceeds",
+      "EasyJournalUITests/ScreenshotTests/testMonthlyLogLargeTextScreenshot"
+    ],
+    "B": [
+      "EasyJournalUITests/ScreenshotTests/testClearingLogLineThenTappingTaskSymbolKeepsTask",
+      "EasyJournalUITests/ScreenshotTests/testMonthlyTaskScreenshotAndDelete",
+      "EasyJournalUITests/ScreenshotTests/testGuardedTrackerOpenKeepsDraftUntilSaveThenSwitches",
+      "EasyJournalUITests/ScreenshotTests/testManyMonthlyTasksLastSymbolStaysReachable",
+      "EasyJournalUITests/ScreenshotTests/testExternalLogSaveFailureKeepsDraftAndAllowsEditing",
+      "EasyJournalUITests/ScreenshotTests/testTrackerFailuresRetryWithoutDoubleToggle",
+      "EasyJournalUITests/ScreenshotTests/testExternalMonthChangeMatchesRouterAndKeepsSourceLine",
+      "EasyJournalUITests/ScreenshotTests/testExternalMonthCrossesYear",
+      "EasyJournalUITests/ScreenshotTests/testMonthMoveTaskDraftKeepsLogEditorAndShowsMessage",
+      "EasyJournalUITests/ScreenshotTests/testTrackerHorizontalScrollDoesNotTurnPage",
+      "EasyJournalUITests/ScreenshotTests/testMonthlySidesSwipePreservesDataAndRightMonthPosition",
+      "EasyJournalUITests/ScreenshotTests/testSideMoveDeleteConfirmationKeepsLeftUntilCancelled",
+      "EasyJournalUITests/ScreenshotTests/testMonthMoveSaveFailureClearsWhenRetrySucceeds",
+      "EasyJournalUITests/ScreenshotTests/testMonthNavigationCrossesYear"
+    ]
+  }
+}

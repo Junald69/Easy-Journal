@@ -54,14 +54,24 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: シミュレーターでビルドとテスト
+    name: CI (${{ matrix.shard }})
     runs-on: macos-26
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(github.event_name == 'pull_request' && '["A","B"]' || '["build"]') }}
+    env:
+      CI_SHARD: ${{ matrix.shard }}
     steps:
       # actions/checkout の安定版。
       # 2026-10-27 に GitHub の Releases を確認し、最新の安定版は v7.0.1（2026-07-20 公開）。
       - name: コードを取得
         uses: actions/checkout@v7.0.1
+
+      - name: 全テストと分割対象の一致を確認
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/ci_test_plan.py --shard "${CI_SHARD}"
 
       # App Group ID（アプリ本体とウィジェットが共有するフォルダの名前）が、
       # Sources/Core/Storage/AppGroup.swift と project.yml で同じかを確認する。
@@ -189,15 +199,16 @@ jobs:
             echo "error: DESTINATION が空です"
             exit 1
           fi
-          xcodebuild build \
+          python3 scripts/ci_measure.py build -- xcodebuild build \
             -project EasyJournal.xcodeproj \
             -scheme EasyJournal \
             -destination "${DESTINATION}" \
             -derivedDataPath DerivedData
 
-      # 単体テストと UI テストを、この1回の xcodebuild test でまとめて実行する。
+      # A は Core 全件と UI 半分、B は残りの UI。選択一覧はソースと照合済み。
+      # 各ジョブで1回だけ xcodebuild test を実行し、成功時には実行済み一覧も照合する。
       # 結果は TestResults.xcresult（テスト結果のまとまり）に入る。
-      # UI テストで増える時間は、ここでは測れない（要確認）。
+      # 開始待ち・個別テスト・終了処理の時間は ci-diagnostics に記録する。
       # main への push では実行しない。PR のときだけテストする。
       - name: テスト
         if: github.event_name == 'pull_request'
@@ -208,12 +219,24 @@ jobs:
             echo "error: DESTINATION が空です"
             exit 1
           fi
-          xcodebuild test \
+          test_args=()
+          while IFS= read -r selector; do
+            test_args+=("${selector}")
+          done < ci-diagnostics/test-arguments.txt
+          {
+            date -u
+            uptime
+            vm_stat
+            df -h .
+            xcrun simctl list devices available
+          } > ci-diagnostics/runner-before-tests.txt
+          python3 scripts/ci_measure.py test -- xcodebuild test \
             -project EasyJournal.xcodeproj \
             -scheme EasyJournal \
             -destination "${DESTINATION}" \
             -derivedDataPath DerivedData \
-            -resultBundlePath TestResults.xcresult
+            -resultBundlePath TestResults.xcresult \
+            "${test_args[@]}"
 
       # actions/upload-artifact の安定版。
       # 2026-10-27 に GitHub の Releases を確認し、最新の安定版は v7.0.2（2026-10-07 公開）。
@@ -223,7 +246,7 @@ jobs:
         if: ${{ failure() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: xcresult
+          name: xcresult-${{ matrix.shard }}
           path: TestResults.xcresult
           retention-days: 7
 
@@ -397,7 +420,21 @@ jobs:
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: screenshots
+          name: screenshots-${{ matrix.shard }}
           path: screenshots/
           retention-days: 7
           if-no-files-found: warn
+
+      # テスト失敗時も計測と生ログを残す。アップロード完了時刻・ジョブ全体は Actions API で確認する。
+      - name: 計測結果をまとめる
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: python3 scripts/ci_measure.py summary
+
+      - name: 診断と計測をアップロード
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ci-diagnostics-${{ matrix.shard }}
+          path: ci-diagnostics/
+          retention-days: 7
+          if-no-files-found: error

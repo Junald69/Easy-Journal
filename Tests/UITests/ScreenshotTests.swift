@@ -1569,9 +1569,11 @@ final class ScreenshotTests: XCTestCase {
             // 欄へのタップで自動フォーカス不良を隠すことはしない。
             let inputReady = NSPredicate { _, _ in field.exists && (focused.evaluate(with: field) || keyboard.exists) }
             let ready = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: inputReady, object: field)], timeout: 5)
-            captureTaskFocus(app, field: field, stage: "before-input", full: ready != .completed)
-            guard ready == .completed else {
-                XCTFail("自動フォーカス後の入力準備が成立しません")
+            captureTaskFocus(app, field: field, stage: "before-input-wait-\(ready.rawValue)", full: false)
+            // 待機結果は過去の観測。診断取得中に状態が成立した可能性も含め、入力直前に再評価する。
+            guard inputReady.evaluate(with: field) else {
+                captureTaskFocus(app, field: field, stage: "input-still-not-ready", full: true)
+                XCTFail("入力直前にも自動フォーカス後の入力準備が成立しません")
                 return
             }
             app.typeText(text)

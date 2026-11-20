@@ -21,6 +21,10 @@ build/
 # テスト結果のまとまり
 *.xcresult
 
+# CI の実行対象・生ログ・計測結果
+ci-diagnostics/
+__pycache__/
+
 # 実機に入れるアプリのファイル
 *.ipa
 
