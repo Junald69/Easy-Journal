@@ -82,12 +82,13 @@ final class ScreenshotTests: XCTestCase {
         }
         let visible = NSPredicate { _, _ in self.trackerCellIsFullyVisible(last, in: grid, app: app) }
         let ready = XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: visible, object: last)], timeout: 5)
-        guard ready == .completed else {
+        captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "before-tap-wait-\(ready.rawValue)", full: false)
+        // 待機結果ではなく、スクロール終了後の最新のフレームと操作可否を確認する。
+        guard trackerCellIsFullyVisible(last, in: grid, app: app), last.isEnabled else {
             captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "cell-not-fully-visible", full: true)
             XCTFail("最後の習慣全体が表示され操作可能になりません")
             return
         }
-        captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "before-tap", full: false)
         guard last.value as? String == "未チェック", last.isEnabled else {
             captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "unexpected-initial-state", full: true)
             XCTFail("習慣8の初期状態が未チェック・操作可能ではありません")
@@ -96,12 +97,18 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
         waitForMonthTitle("2026年 10月", in: app)
         last.tap()
-        let checked = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND value == %@", "チェック済み"), object: last)
+        let checkedValue = NSPredicate(format: "exists == true AND value == %@", "チェック済み")
+        let checked = XCTNSPredicateExpectation(predicate: checkedValue, object: last)
         let result = XCTWaiter().wait(for: [checked], timeout: 5)
-        captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "after-tap", full: result != .completed)
-        XCTAssertEqual(result, .completed, "習慣8の保存・再読込後のチェック状態が一致しません")
+        captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "after-tap-wait-\(result.rawValue)", full: false)
+        guard checkedValue.evaluate(with: last) else {
+            captureTrackerDiagnostic(app, cell: last, grid: grid, stage: "check-not-saved", full: true)
+            XCTFail("習慣8の保存・再読込後のチェック状態が一致しません")
+            return
+        }
         XCTAssertFalse(app.descendants(matching: .any)["monthlyTrackerError"].exists)
+        XCTAssertEqual(app.buttons["monthlyRightPageButton"].value as? String, "選択中")
+        waitForMonthTitle("2026年 10月", in: app)
         attachScreenshot(app, name: "habit-tracker-wide")
         let swipe = app.descendants(matching: .any)["monthlyPageSwipeLeading"].firstMatch
         swipe.swipeRight()
@@ -109,10 +116,11 @@ final class ScreenshotTests: XCTestCase {
     }
 
     private func trackerCellIsFullyVisible(_ cell: XCUIElement, in grid: XCUIElement, app: XCUIApplication) -> Bool {
-        guard cell.exists else { return false }
+        guard cell.exists, grid.exists else { return false }
         let frame = cell.frame
         let viewport = grid.frame.intersection(app.frame)
         guard frame.width >= 44, frame.height >= 44, viewport.isEmpty == false else { return false }
+        // 0.5pt の罫線はセル外へ 0.25pt 描かれる。既存の 1pt 許容差でその境界を扱う。
         return viewport.insetBy(dx: -1, dy: -1).contains(frame) && cell.isHittable
     }
 
@@ -1577,9 +1585,17 @@ final class ScreenshotTests: XCTestCase {
                 return
             }
             app.typeText(text)
-            let correct = field.value as? String == text
-            captureTaskFocus(app, field: field, stage: "after-input", full: !correct)
-            XCTAssertTrue(correct, "タスク入力欄へ自動入力できません: " + String(describing: field.value))
+            let entered = NSPredicate(format: "exists == true AND value == %@", text)
+            let inputResult = XCTWaiter().wait(
+                for: [XCTNSPredicateExpectation(predicate: entered, object: field)], timeout: 5)
+            captureTaskFocus(app, field: field, stage: "after-input-wait-\(inputResult.rawValue)", full: false)
+            // 実入力の反映を待ち、待機結果や入力直後の値を使い回さず最新値を検証する。
+            let actual = field.exists ? field.value as? String : nil
+            guard actual == text else {
+                captureTaskFocus(app, field: field, stage: "input-value-mismatch", full: true)
+                XCTFail("タスク入力欄へ自動入力できません: " + String(describing: actual))
+                return
+            }
         }
     }
 
