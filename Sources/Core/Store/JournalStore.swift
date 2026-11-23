@@ -1129,3 +1129,33 @@ extension JournalStore {
         return only.actionRaw == TaskHistoryAction.created.rawValue
     }
 }
+
+extension JournalStore {
+    /// 読むだけ。月ページや Daily は作らない。読取失敗を空状態へ置き換えない。
+    func monthlyTrackerContent(monthKey: String) throws -> MonthlyTrackerContent {
+        guard DateKey.isValidMonthKey(monthKey) else {
+            throw JournalStoreError.invalidMonthKey(monthKey)
+        }
+        let habits = try context.fetch(FetchDescriptor<Habit>()).filter {
+            $0.monthly?.monthKey == monthKey
+        }.sorted {
+            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+            if $0.id != $1.id { return $0.id.uuidString < $1.id.uuidString }
+            if $0.name != $1.name { return $0.name < $1.name }
+            return $0.shortLabel < $1.shortLabel
+        }
+        var seen: Set<UUID> = []
+        let columns = habits.compactMap { habit -> MonthlyTrackerContent.Column? in
+            guard seen.insert(habit.id).inserted else { return nil }
+            return .init(id: habit.id, name: habit.name, shortLabel: habit.shortLabel)
+        }
+        let entries = try context.fetch(FetchDescriptor<HabitEntry>())
+        let checks = Set(entries.compactMap { entry -> MonthlyTrackerContent.Check? in
+            guard seen.contains(entry.habitID), entry.isDone,
+                  DateKey.isValidDayKey(entry.dateKey),
+                  DateKey.monthKey(ofDayKey: entry.dateKey) == monthKey else { return nil }
+            return .init(habitID: entry.habitID, dateKey: entry.dateKey)
+        })
+        return MonthlyTrackerContent(columns: columns, checks: checks)
+    }
+}

@@ -182,7 +182,8 @@ struct MonthlySpreadView: View {
                 topBar
                 MonthlyPageNavigation(currentPage: currentPage, requestPage: requestPage)
                 if currentPage.isMonthlyTracker {
-                    MonthlyTrackerPlaceholder(monthKey: displayedMonthKey)
+                    MonthlyTrackerPageView(monthKey: displayedMonthKey, todayKey: todayKey)
+                        .id(displayedMonthKey)
                 } else {
                     logList
                 }
